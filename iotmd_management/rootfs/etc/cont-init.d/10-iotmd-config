@@ -1,0 +1,16 @@
+#!/usr/bin/with-contenv bashio
+set -e
+
+CERTFILE="$(bashio::config 'certfile')"
+KEYFILE="$(bashio::config 'keyfile')"
+case "${CERTFILE}" in (*[!A-Za-z0-9._-]*|'') bashio::exit.nok 'certfile must be a filename within /ssl';; esac
+case "${KEYFILE}" in (*[!A-Za-z0-9._-]*|'') bashio::exit.nok 'keyfile must be a filename within /ssl';; esac
+CERT_PATH="/ssl/${CERTFILE}"
+KEY_PATH="/ssl/${KEYFILE}"
+test -s "${CERT_PATH}" || bashio::exit.nok "TLS certificate not found: ${CERT_PATH}"
+test -s "${KEY_PATH}" || bashio::exit.nok "TLS private key not found: ${KEY_PATH}"
+mkdir -p /share/iotmd-releases/bundles /share/iotmd-releases/stable /share/iotmd-releases/beta
+sed -e "s|%%CERT_PATH%%|${CERT_PATH}|g" -e "s|%%KEY_PATH%%|${KEY_PATH}|g" \
+  /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+nginx -t
+bashio::log.info 'IoTMD Management Suite configured; device release endpoint is port 8443'

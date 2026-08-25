@@ -1,0 +1,62 @@
+user root;
+worker_processes 1;
+pid /run/nginx/nginx.pid;
+error_log /dev/stdout notice;
+
+events { worker_connections 256; }
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    access_log /dev/stdout;
+    sendfile on;
+    keepalive_timeout 30;
+    server_tokens off;
+    types { application/octet-stream iotapp iotcore iotuni; }
+
+    server {
+        listen 8443 ssl;
+        listen [::]:8443 ssl;
+        ssl_certificate %%CERT_PATH%%;
+        ssl_certificate_key %%KEY_PATH%%;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_session_cache shared:IOTMD:4m;
+        root /share/iotmd-releases;
+        if ($request_method !~ ^(GET|HEAD)$) { return 405; }
+        location = /healthz { access_log off; default_type text/plain; return 200 'ok\n'; }
+        location ~ ^/(stable|beta)/latest[.]json$ {
+            try_files $uri =404;
+            default_type application/json;
+            add_header Cache-Control 'no-store' always;
+            add_header X-Content-Type-Options 'nosniff' always;
+        }
+        location /bundles/ {
+            try_files $uri =404;
+            add_header Cache-Control 'public, max-age=31536000, immutable' always;
+            add_header X-Content-Type-Options 'nosniff' always;
+        }
+        location / { return 404; }
+    }
+
+    server {
+        listen 8099;
+        listen [::]:8099;
+        allow 172.30.32.2;
+        deny all;
+        location /releases/ {
+            alias /share/iotmd-releases/;
+            autoindex on;
+            autoindex_exact_size off;
+            add_header Cache-Control 'no-store' always;
+            add_header X-Frame-Options 'SAMEORIGIN' always;
+        }
+        location / {
+            proxy_pass http://127.0.0.1:8098;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            add_header X-Frame-Options 'SAMEORIGIN' always;
+            add_header X-Content-Type-Options 'nosniff' always;
+        }
+    }
+}
