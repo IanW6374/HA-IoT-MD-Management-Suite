@@ -18,7 +18,7 @@ class FleetAddonTests(unittest.TestCase):
 
         self.assertIn('name: IoTMD Management Suite', repository)
         self.assertIn(
-            'url: https://github.com/IanW6374/IoTMD-Management-Suite',
+            'url: https://github.com/IanW6374/HA-IoTMD-Management-Suite',
             repository,
         )
         self.assertIn('slug: iotmd_management', addon)

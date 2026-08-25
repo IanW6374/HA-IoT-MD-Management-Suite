@@ -2,7 +2,7 @@ name: IoTMD Management Suite
 version: 2.1.0
 slug: iotmd_management
 description: Fleet, policy, staged rollout and secure release management for IoTMD
-url: https://github.com/IanW6374/IoTMD-Management-Suite
+url: https://github.com/IanW6374/HA-IoTMD-Management-Suite
 arch:
   - aarch64
   - amd64

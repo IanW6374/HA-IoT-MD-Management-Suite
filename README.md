@@ -15,7 +15,7 @@ Add this repository URL under **Settings > Add-ons > Add-on store >
 Repositories**:
 
 ```text
-https://github.com/IanW6374/IoTMD-Management-Suite
+https://github.com/IanW6374/HA-IoTMD-Management-Suite
 ```
 
 Install **IoTMD Management Suite**, choose the certificate and key filenames
