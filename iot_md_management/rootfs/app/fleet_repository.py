@@ -1,4 +1,4 @@
-"""Transactional SQLite repositories and durable jobs for IoTMD fleet state."""
+"""Transactional SQLite repositories and durable jobs for IoT MD fleet state."""
 
 import json
 import sqlite3

@@ -11,7 +11,7 @@ to devices. Do not place the offline firmware/application release-signing key in
 Home Assistant.
 
 Back up add-on data to retain inventory, rollouts, events and the fleet policy
-identity. Back up `/share/iotmd-releases` separately if release files must be
+identity. Back up `/share/iot-md-releases` separately if release files must be
 retained. Rotate HTTPS/client certificates before expiry and update enrolled
 paths atomically. Retention bounds stored events but does not delete release
 artifacts.

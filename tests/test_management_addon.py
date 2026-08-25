@@ -14,16 +14,23 @@ class FleetAddonTests(unittest.TestCase):
     def test_home_assistant_repository_layout_is_installable(self):
         root = Path(__file__).resolve().parents[1]
         repository = (root / 'repository.yaml').read_text(encoding='utf-8')
-        addon = (root / 'iotmd_management/config.yaml').read_text(encoding='utf-8')
+        addon = (root / 'iot_md_management/config.yaml').read_text(encoding='utf-8')
 
-        self.assertIn('name: IoTMD Management Suite', repository)
+        self.assertIn('name: Home Assistant IoT MD Management Suite', repository)
         self.assertIn(
-            'url: https://github.com/IanW6374/HA-IoTMD-Management-Suite',
+            'url: https://github.com/IanW6374/HA-IoT-MD-Management-Suite',
             repository,
         )
-        self.assertIn('slug: iotmd_management', addon)
+        self.assertIn('name: IoT MD Management Suite', addon)
+        self.assertIn('version: 2.1.1', addon)
+        self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
-        self.assertTrue((root / 'iotmd_management/Dockerfile').is_file())
+        self.assertTrue((root / 'iot_md_management/Dockerfile').is_file())
+
+    def test_ingress_uses_shared_iot_brand_shell(self):
+        self.assertIn('<header class="topbar">', self.module.HTML)
+        self.assertIn('<span class="brand-mark">MD</span><span>IoT MD Management Suite</span>', self.module.HTML)
+        self.assertIn('<nav aria-label="Primary">', self.module.HTML)
 
     def test_incompatible_sqlite_schema_requires_clean_seed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -43,22 +50,22 @@ class FleetAddonTests(unittest.TestCase):
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.previous = os.environ.get('IOTMD_MANAGEMENT_DATA')
-        os.environ['IOTMD_MANAGEMENT_DATA'] = self.temp.name
+        self.previous = os.environ.get('IOT_MD_MANAGEMENT_DATA')
+        os.environ['IOT_MD_MANAGEMENT_DATA'] = self.temp.name
         path = (
             Path(__file__).resolve().parents[1] /
-            'iotmd_management/rootfs/app/management_app.py'
+            'iot_md_management/rootfs/app/management_app.py'
         )
-        spec = importlib.util.spec_from_file_location('iotmd_fleet_test', path)
+        spec = importlib.util.spec_from_file_location('iot_md_fleet_test', path)
         self.module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.module)
 
     def tearDown(self):
         self.module.STORE.close()
         if self.previous is None:
-            os.environ.pop('IOTMD_MANAGEMENT_DATA', None)
+            os.environ.pop('IOT_MD_MANAGEMENT_DATA', None)
         else:
-            os.environ['IOTMD_MANAGEMENT_DATA'] = self.previous
+            os.environ['IOT_MD_MANAGEMENT_DATA'] = self.previous
         self.temp.cleanup()
 
     def policy(self):
