@@ -499,12 +499,21 @@ class ReleaseCatalog:
 
     def promote(self, tag, channel):
         channel = str(channel)
-        if channel not in ('stable', 'beta'):
-            raise ValueError('release channel must be stable or beta')
+        if channel not in ('', 'none', 'stable', 'beta'):
+            raise ValueError('release channel must be not promoted, stable or beta')
         with self.lock:
             release = next((item for item in self.state['releases'] if item['tag'] == tag), None)
             if not release or not release.get('verified'):
                 raise ValueError('release has not been imported and verified')
+            previous_channels = set(release.get('channels', []))
+            if channel in ('', 'none'):
+                for previous in previous_channels:
+                    (self.release_root / previous / 'latest.json').unlink(
+                        missing_ok=True
+                    )
+                release['channels'] = []
+                self._save()
+                return {'tag': tag, 'channel': '', 'catalog': ''}
             descriptors = []
             for kind in ('application', 'firmware'):
                 asset = release.get('assets', {}).get(kind)
@@ -535,10 +544,14 @@ class ReleaseCatalog:
             temporary = target.with_suffix('.tmp')
             temporary.write_text(json.dumps(index, indent=2) + '\n')
             os.replace(temporary, target)
+            for previous in previous_channels - {channel}:
+                (self.release_root / previous / 'latest.json').unlink(
+                    missing_ok=True
+                )
             for item in self.state['releases']:
                 channels = set(item.get('channels', []))
                 channels.discard(channel)
                 item['channels'] = sorted(channels)
-            release['channels'] = sorted(set(release.get('channels', [])) | {channel})
+            release['channels'] = [channel]
             self._save()
             return {'tag': tag, 'channel': channel, 'catalog': str(target)}

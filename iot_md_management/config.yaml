@@ -1,5 +1,5 @@
 name: IoT MD Management Suite
-version: 2.2.0
+version: 2.2.1
 slug: iot_md_management
 description: Fleet, policy, staged rollout and secure release management for IoT MD devices
 url: https://github.com/IanW6374/HA-IoT-MD-Management-Suite
@@ -35,7 +35,7 @@ options:
   event_retention: 5000
   github_sync_enabled: false
   github_repository: IanW6374/IoT-Modular-Device
-  release_base_url: https://homeassistant.local:8443
+  release_base_url: https://iotmd-update.home.arpa:8443
   release_sync_interval_s: 3600
   auto_promote_stable: false
   auto_promote_beta: false

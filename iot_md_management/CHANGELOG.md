@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.2.1
+
+- Replace the crowded per-release promotion buttons with one Stable, Beta or
+  Not promoted selector, including explicit channel removal.
+- Make the verified-release inventory responsive and prevent long source
+  revisions or controls from overlapping adjacent cards.
+- Default the signed release endpoint to
+  `https://iotmd-update.home.arpa:8443`.
+
 ## 2.2.0
 
 - Synchronize published IoT-MD GitHub Releases into a durable inventory.

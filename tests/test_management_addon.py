@@ -26,11 +26,14 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.0', addon)
+        self.assertIn('version: 2.2.1', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
         self.assertIn('github_sync_enabled: bool', addon)
+        self.assertIn(
+            'release_base_url: https://iotmd-update.home.arpa:8443', addon
+        )
         self.assertTrue((root / 'iot_md_management/Dockerfile').is_file())
         self.assertTrue((root / 'iot_md_management/translations/en.yaml').is_file())
 
@@ -40,6 +43,12 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('<nav aria-label="Primary">', self.module.HTML)
         self.assertIn('Verified releases', self.module.HTML)
         self.assertIn('Management Suite verification key', self.module.HTML)
+        self.assertIn('class="release-grid"', self.module.HTML)
+        self.assertIn('class="release-channel"', self.module.HTML)
+        self.assertIn('>Not promoted</option>', self.module.HTML)
+        self.assertIn('setReleaseChannel(this)', self.module.HTML)
+        self.assertNotIn('Promote stable', self.module.HTML)
+        self.assertNotIn('Promote beta', self.module.HTML)
 
     def test_portal_sections_have_distinct_routes_and_active_tabs(self):
         self.assertEqual(
@@ -245,6 +254,14 @@ class FleetAddonTests(unittest.TestCase):
             ), signed_message('release-catalog', document),
             ec.ECDSA(hashes.SHA256()),
         )
+        self.assertEqual(catalog.state['releases'][0]['channels'], ['stable'])
+        catalog.promote('v2.3.0', 'beta')
+        self.assertFalse((root / 'site/stable/latest.json').exists())
+        self.assertTrue((root / 'site/beta/latest.json').exists())
+        self.assertEqual(catalog.state['releases'][0]['channels'], ['beta'])
+        catalog.promote('v2.3.0', 'none')
+        self.assertFalse((root / 'site/beta/latest.json').exists())
+        self.assertEqual(catalog.state['releases'][0]['channels'], [])
 
     def test_registered_device_response_hides_certificate_paths(self):
         store = self.module.FleetStore(Path(self.temp.name) / 'state.json')
