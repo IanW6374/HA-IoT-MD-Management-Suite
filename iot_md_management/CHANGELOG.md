@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.2.0
+
+- Synchronize published IoT-MD GitHub Releases into a durable inventory.
+- Make GitHub synchronization an explicit, default-off add-on setting.
+- Verify pinned artifact signatures, payload hashes, GitHub digests, SLSA
+  provenance and SBOM before importing any release.
+- Add explicit Stable and Beta promotion controls with optional automatic
+  promotion.
+- Sign local format-3 channel catalogs with the existing fleet-policy identity.
+- Expose one Management Suite public key for fleet and catalog trust while keeping
+  the offline artifact-signing private key outside Home Assistant.
+- Split the ingress portal into focused Overview, Releases, Devices, Policy,
+  Rollouts and Settings tabs using the shared IoT application layout.
+
 ## 2.1.1
 
 - Establish the clean IoT MD Management Suite application identity.

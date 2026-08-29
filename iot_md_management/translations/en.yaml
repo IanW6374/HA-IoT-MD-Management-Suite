@@ -1,0 +1,39 @@
+configuration:
+  certfile:
+    name: TLS certificate file
+    description: Certificate chain filename in Home Assistant /ssl for the device release endpoint.
+  keyfile:
+    name: TLS private key file
+    description: Private key filename in Home Assistant /ssl for the device release endpoint.
+  poll_interval_s:
+    name: Device poll interval
+    description: Seconds between fleet inventory and health polls.
+  request_timeout_s:
+    name: Device request timeout
+    description: Maximum seconds allowed for a Device API request.
+  event_retention:
+    name: Fleet event retention
+    description: Maximum number of device events retained in the suite database.
+  github_sync_enabled:
+    name: Enable GitHub Release synchronization
+    description: Allow manual and scheduled import of verified releases from GitHub.
+  github_repository:
+    name: GitHub release repository
+    description: Public source repository in owner/name form.
+  github_token:
+    name: GitHub API token
+    description: Optional read-only token for private access or a higher API rate limit.
+  release_base_url:
+    name: Device release base URL
+    description: Exact HTTPS origin used by devices, including the externally published port.
+  release_sync_interval_s:
+    name: GitHub synchronization interval
+    description: Seconds between automatic GitHub Release inventory checks.
+  auto_promote_stable:
+    name: Automatically promote production releases
+    description: Promote the newest newly imported non-prerelease to Stable after verification.
+  auto_promote_beta:
+    name: Automatically promote prereleases
+    description: Promote the newest newly imported prerelease to Beta after verification.
+network:
+  8443/tcp: IoT-MD signed release endpoint

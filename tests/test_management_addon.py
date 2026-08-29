@@ -1,4 +1,6 @@
 import importlib.util
+import hashlib
+import json
 import os
 import sqlite3
 import tempfile
@@ -7,7 +9,9 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+from cryptography.hazmat.primitives.asymmetric.utils import (
+    decode_dss_signature, encode_dss_signature,
+)
 
 
 class FleetAddonTests(unittest.TestCase):
@@ -22,15 +26,37 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.1.1', addon)
+        self.assertIn('version: 2.2.0', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
+        self.assertIn('github_sync_enabled: false', addon)
+        self.assertIn('github_sync_enabled: bool', addon)
         self.assertTrue((root / 'iot_md_management/Dockerfile').is_file())
+        self.assertTrue((root / 'iot_md_management/translations/en.yaml').is_file())
 
     def test_ingress_uses_shared_iot_brand_shell(self):
         self.assertIn('<header class="topbar">', self.module.HTML)
         self.assertIn('<span class="brand-mark">MD</span><span>IoT MD Management Suite</span>', self.module.HTML)
         self.assertIn('<nav aria-label="Primary">', self.module.HTML)
+        self.assertIn('Verified releases', self.module.HTML)
+        self.assertIn('Management Suite verification key', self.module.HTML)
+
+    def test_portal_sections_have_distinct_routes_and_active_tabs(self):
+        self.assertEqual(
+            set(self.module.PORTAL_PAGES),
+            {'/', '/releases', '/devices', '/policy', '/rollouts', '/settings'},
+        )
+        settings = self.module.render_portal('settings').decode()
+        self.assertIn('<body data-page="settings">', settings)
+        self.assertIn('data-page-link="settings" href="settings"', settings)
+        self.assertIn('data-page-section="settings"', settings)
+        self.assertNotIn('__GITHUB_REPOSITORY__', settings)
+        self.assertIn('IanW6374/IoT-Modular-Device', settings)
+
+    def test_github_synchronization_is_explicitly_enabled(self):
+        self.assertFalse(self.module.RELEASE_SYNC_STATE['enabled'])
+        with self.assertRaisesRegex(ValueError, 'disabled in add-on settings'):
+            self.module.start_release_sync()
 
     def test_incompatible_sqlite_schema_requires_clean_seed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -51,7 +77,9 @@ class FleetAddonTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.previous = os.environ.get('IOT_MD_MANAGEMENT_DATA')
+        self.previous_release_root = os.environ.get('IOT_MD_RELEASE_ROOT')
         os.environ['IOT_MD_MANAGEMENT_DATA'] = self.temp.name
+        os.environ['IOT_MD_RELEASE_ROOT'] = str(Path(self.temp.name) / 'releases')
         path = (
             Path(__file__).resolve().parents[1] /
             'iot_md_management/rootfs/app/management_app.py'
@@ -66,6 +94,10 @@ class FleetAddonTests(unittest.TestCase):
             os.environ.pop('IOT_MD_MANAGEMENT_DATA', None)
         else:
             os.environ['IOT_MD_MANAGEMENT_DATA'] = self.previous
+        if self.previous_release_root is None:
+            os.environ.pop('IOT_MD_RELEASE_ROOT', None)
+        else:
+            os.environ['IOT_MD_RELEASE_ROOT'] = self.previous_release_root
         self.temp.cleanup()
 
     def policy(self):
@@ -111,6 +143,107 @@ class FleetAddonTests(unittest.TestCase):
         self.assertNotEqual(
             self.module.SIGNING_KEY_PATH.read_bytes(),
             self.module.PUBLIC_KEY_PATH.read_bytes()
+        )
+
+    def test_verified_artifacts_can_be_promoted_to_format_3_catalog(self):
+        from release_catalog import (
+            ArtifactVerifier, CatalogSigner, P256_ORDER, ReleaseCatalog,
+            signed_message,
+        )
+        root = Path(self.temp.name) / 'catalog-test'
+        root.mkdir()
+        update_private = ec.generate_private_key(ec.SECP256R1())
+        numbers = update_private.public_key().public_numbers()
+        update_public_path = root / 'update-public.bin'
+        update_public_path.write_bytes(
+            numbers.x.to_bytes(32, 'big') + numbers.y.to_bytes(32, 'big')
+        )
+
+        def sign_manifest(kind, manifest):
+            value = dict(manifest)
+            value['signature_scheme'] = 'ecdsa-p256-sha256'
+            der = update_private.sign(
+                signed_message(kind, value), ec.ECDSA(hashes.SHA256())
+            )
+            r, s = decode_dss_signature(der)
+            if s > P256_ORDER // 2:
+                s = P256_ORDER - s
+            value['signature'] = (
+                r.to_bytes(32, 'big') + s.to_bytes(32, 'big')
+            ).hex()
+            return value
+
+        revision = '1' * 40
+        app_payload = b'IoTMD_SOURCE_REVISION:' + revision.encode()
+        app_manifest = sign_manifest('iotapp', {
+            'format_version': 6, 'target_board': 'esp32-s3',
+            'min_recovery_api': 6, 'max_recovery_api': 6,
+            'version': '2.3.0', 'release_sequence': 23000,
+            'minimum_core_api': 9, 'minimum_config_api': 3,
+            'maximum_config_api': 3,
+            'components': {'runtime': 60, 'modules': {}},
+            'files': [{
+                'path': 'iotmd.py', 'size': len(app_payload),
+                'sha256': hashlib.sha256(app_payload).hexdigest(),
+            }],
+        })
+        core_payload = b'\xe9IoTMD_SOURCE_REVISION:' + revision.encode()
+        core_manifest = sign_manifest('iotcore', {
+            'format_version': 6, 'target_board': 'esp32-s3',
+            'version': '2.3.0', 'release_sequence': 23000,
+            'minimum_core_api': 9, 'size': len(core_payload),
+            'sha256': hashlib.sha256(core_payload).hexdigest(),
+        })
+
+        def bundle(name, magic, manifest, payload):
+            encoded = json.dumps(manifest, separators=(',', ':')).encode()
+            path = root / 'site' / 'bundles' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(magic + len(encoded).to_bytes(4, 'big') + encoded + payload)
+            return path
+
+        app = bundle('application-2.3.0.iotapp', b'IOTA1\n', app_manifest, app_payload)
+        core = bundle('iotmd-core-2.3.0.iotcore', b'IOTC1\n', core_manifest, core_payload)
+        verifier = ArtifactVerifier(update_public_path)
+        app_details = verifier.verify(app)
+        core_details = verifier.verify(core)
+        signer = CatalogSigner(root / 'catalog.pem', root / 'catalog.bin')
+        catalog = ReleaseCatalog(
+            root / 'state.json', root / 'site', verifier, signer,
+            'IanW6374/IoT-Modular-Device', 'https://updates.example:8443',
+        )
+        catalog.state['releases'] = [{
+            'tag': 'v2.3.0', 'version': '2.3.0', 'verified': True,
+            'release_sequence': 23000, 'source_revision': revision,
+            'published_at': '2026-08-29T10:00:00Z', 'channels': [],
+            'assets': {
+                'application': {key: app_details[key] for key in (
+                    'kind', 'version', 'release_sequence', 'size', 'sha256'
+                )} | {'name': app.name},
+                'firmware': {key: core_details[key] for key in (
+                    'kind', 'version', 'release_sequence', 'size', 'sha256'
+                )} | {'name': core.name},
+            },
+        }]
+        catalog._save()
+        catalog.promote('v2.3.0', 'stable')
+        document = json.loads((root / 'site/stable/latest.json').read_text())
+        self.assertEqual(document['format_version'], 3)
+        self.assertEqual(len(document['releases']), 2)
+        self.assertEqual(document['releases'][0]['type'], 'application')
+        catalog_public = root.joinpath('catalog.bin').read_bytes()
+        public_key = ec.EllipticCurvePublicNumbers(
+            int.from_bytes(catalog_public[:32], 'big'),
+            int.from_bytes(catalog_public[32:], 'big'),
+            ec.SECP256R1(),
+        ).public_key()
+        signature = bytes.fromhex(document['signature'])
+        public_key.verify(
+            encode_dss_signature(
+                int.from_bytes(signature[:32], 'big'),
+                int.from_bytes(signature[32:], 'big'),
+            ), signed_message('release-catalog', document),
+            ec.ECDSA(hashes.SHA256()),
         )
 
     def test_registered_device_response_hides_certificate_paths(self):
