@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.2.2
+
+- Correct the default signed release endpoint to
+  `https://iot-upgrade.home.arpa:8443`.
+
 ## 2.2.1
 
 - Replace the crowded per-release promotion buttons with one Stable, Beta or

@@ -26,13 +26,13 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.1', addon)
+        self.assertIn('version: 2.2.2', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
         self.assertIn('github_sync_enabled: bool', addon)
         self.assertIn(
-            'release_base_url: https://iotmd-update.home.arpa:8443', addon
+            'release_base_url: https://iot-upgrade.home.arpa:8443', addon
         )
         self.assertTrue((root / 'iot_md_management/Dockerfile').is_file())
         self.assertTrue((root / 'iot_md_management/translations/en.yaml').is_file())

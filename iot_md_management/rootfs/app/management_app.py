@@ -78,7 +78,7 @@ CATALOG_SIGNER = CatalogSigner(SIGNING_KEY_PATH, PUBLIC_KEY_PATH)
 RELEASES = ReleaseCatalog(
     RELEASE_STATE_PATH, RELEASE_ROOT, ArtifactVerifier(TRUSTED_UPDATE_KEY_PATH),
     CATALOG_SIGNER, OPTIONS.get('github_repository', 'IanW6374/IoT-Modular-Device'),
-    OPTIONS.get('release_base_url', 'https://iotmd-update.home.arpa:8443'),
+    OPTIONS.get('release_base_url', 'https://iot-upgrade.home.arpa:8443'),
     OPTIONS.get('github_token', ''),
 )
 CONTROLLER = FleetController(
@@ -97,7 +97,7 @@ def render_portal(page):
             'github_repository', 'IanW6374/IoT-Modular-Device'
         ),
         '__RELEASE_BASE_URL__': OPTIONS.get(
-            'release_base_url', 'https://iotmd-update.home.arpa:8443'
+            'release_base_url', 'https://iot-upgrade.home.arpa:8443'
         ),
         '__RELEASE_SYNC_INTERVAL__': OPTIONS.get('release_sync_interval_s', 3600),
         '__AUTO_PROMOTE_STABLE__': 'Enabled' if OPTIONS.get(
