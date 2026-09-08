@@ -1,5 +1,5 @@
 name: IoT MD Management Suite
-version: 2.2.2
+version: 2.2.3
 slug: iot_md_management
 description: Fleet, policy, staged rollout and secure release management for IoT MD devices
 url: https://github.com/IanW6374/HA-IoT-MD-Management-Suite

@@ -9,7 +9,7 @@ CERT_PATH="/ssl/${CERTFILE}"
 KEY_PATH="/ssl/${KEYFILE}"
 test -s "${CERT_PATH}" || bashio::exit.nok "TLS certificate not found: ${CERT_PATH}"
 test -s "${KEY_PATH}" || bashio::exit.nok "TLS private key not found: ${KEY_PATH}"
-mkdir -p /share/iot-md-releases/bundles /share/iot-md-releases/stable /share/iot-md-releases/beta
+mkdir -p /share/iot-md-releases/bundles /share/iot-md-releases/stable /share/iot-md-releases/beta /share/iot-md-releases/alpha
 sed -e "s|%%CERT_PATH%%|${CERT_PATH}|g" -e "s|%%KEY_PATH%%|${KEY_PATH}|g" \
   /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 nginx -t

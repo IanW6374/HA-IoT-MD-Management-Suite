@@ -26,7 +26,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.2', addon)
+        self.assertIn('version: 2.2.3', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
@@ -46,6 +46,7 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('class="release-grid"', self.module.HTML)
         self.assertIn('class="release-channel"', self.module.HTML)
         self.assertIn('>Not promoted</option>', self.module.HTML)
+        self.assertIn('>Alpha</option>', self.module.HTML)
         self.assertIn('setReleaseChannel(this)', self.module.HTML)
         self.assertNotIn('Promote stable', self.module.HTML)
         self.assertNotIn('Promote beta', self.module.HTML)
@@ -259,8 +260,12 @@ class FleetAddonTests(unittest.TestCase):
         self.assertFalse((root / 'site/stable/latest.json').exists())
         self.assertTrue((root / 'site/beta/latest.json').exists())
         self.assertEqual(catalog.state['releases'][0]['channels'], ['beta'])
-        catalog.promote('v2.3.0', 'none')
+        catalog.promote('v2.3.0', 'alpha')
         self.assertFalse((root / 'site/beta/latest.json').exists())
+        self.assertTrue((root / 'site/alpha/latest.json').exists())
+        self.assertEqual(catalog.state['releases'][0]['channels'], ['alpha'])
+        catalog.promote('v2.3.0', 'none')
+        self.assertFalse((root / 'site/alpha/latest.json').exists())
         self.assertEqual(catalog.state['releases'][0]['channels'], [])
 
     def test_registered_device_response_hides_certificate_paths(self):

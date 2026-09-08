@@ -31,7 +31,7 @@ An import succeeds only when:
 - the SBOM is valid JSON.
 
 Imported assets are moved atomically from an incoming directory into
-`/share/iot-md-releases/bundles`. Promotion signs a format-3 Stable or Beta
+`/share/iot-md-releases/bundles`. Promotion signs a format-3 Stable, Beta or Alpha
 catalog with the shared Management Suite key and writes `latest.json` atomically.
 Devices verify that fleet/catalog key first, then independently verify the selected
 bundle with their immutable update key. Automatic Stable/Beta promotion is

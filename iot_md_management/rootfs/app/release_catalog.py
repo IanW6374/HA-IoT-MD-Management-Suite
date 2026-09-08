@@ -299,7 +299,7 @@ class ReleaseCatalog:
         self.now = now or time.time
         self.lock = threading.RLock()
         self.release_root.joinpath('bundles').mkdir(parents=True, exist_ok=True)
-        for channel in ('stable', 'beta'):
+        for channel in ('stable', 'beta', 'alpha'):
             self.release_root.joinpath(channel).mkdir(parents=True, exist_ok=True)
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.state = self._load()
@@ -499,8 +499,10 @@ class ReleaseCatalog:
 
     def promote(self, tag, channel):
         channel = str(channel)
-        if channel not in ('', 'none', 'stable', 'beta'):
-            raise ValueError('release channel must be not promoted, stable or beta')
+        if channel not in ('', 'none', 'stable', 'beta', 'alpha'):
+            raise ValueError(
+                'release channel must be not promoted, stable, beta or alpha'
+            )
         with self.lock:
             release = next((item for item in self.state['releases'] if item['tag'] == tag), None)
             if not release or not release.get('verified'):

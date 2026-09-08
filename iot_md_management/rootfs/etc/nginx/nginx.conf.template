@@ -24,7 +24,7 @@ http {
         root /share/iot-md-releases;
         if ($request_method !~ ^(GET|HEAD)$) { return 405; }
         location = /healthz { access_log off; default_type text/plain; return 200 'ok\n'; }
-        location ~ ^/(stable|beta)/latest[.]json$ {
+        location ~ ^/(stable|beta|alpha)/latest[.]json$ {
             try_files $uri =404;
             default_type application/json;
             add_header Cache-Control 'no-store' always;

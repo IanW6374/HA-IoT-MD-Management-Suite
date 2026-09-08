@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.2.3
+
+- Add Alpha as a release-promotion channel in the portal and signed catalog
+  service, matching the IoT-MD automatic-upgrade channel selector.
+
 ## 2.2.2
 
 - Correct the default signed release endpoint to
