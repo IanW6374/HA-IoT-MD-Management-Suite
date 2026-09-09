@@ -30,7 +30,7 @@ MAGIC_TYPES = {
 TYPE_NAMES = {
     'application': 'iotapp', 'firmware': 'iotcore', 'universal': 'iotuni',
 }
-ASSET_SUFFIXES = ('.iotapp', '.iotcore', '.iotuni', '.json')
+ASSET_SUFFIXES = ('.iotapp', '.iotcore', '.iotuni', '.json', '.jsonl')
 SOURCE_MARKER = b'IoTMD_SOURCE_REVISION:'
 MAX_ASSET_BYTES = 16 * 1024 * 1024
 VERSION_PATTERN = re.compile(r'^v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)$')

@@ -19,8 +19,9 @@ GitHub requests while retaining existing inventory and promoted catalogs. The
 source must be a public GitHub repository in `owner/name` form. An optional
 fine-grained read-only token raises GitHub API limits for private or busy
 installations. Synchronization reads published, non-draft GitHub Releases and
-requires versioned application and core bundles plus `provenance-*.json` and
-`sbom-*.spdx.json`. Universal bundles are verified and inventoried when present.
+requires versioned application and core bundles plus
+`provenance-*.intoto.jsonl` and `sbom-*.cdx.json`. Universal bundles are
+verified and inventoried when present.
 
 An import succeeds only when:
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.4
+
+- Accept standard in-toto provenance assets ending in `.intoto.jsonl` during
+  GitHub release synchronization. Previously these assets were discarded by
+  the filename filter before provenance and SBOM validation.
+
 ## 2.2.3
 
 - Add Alpha as a release-promotion channel in the portal and signed catalog

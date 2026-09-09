@@ -26,7 +26,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.3', addon)
+        self.assertIn('version: 2.2.4', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
@@ -67,6 +67,10 @@ class FleetAddonTests(unittest.TestCase):
         self.assertFalse(self.module.RELEASE_SYNC_STATE['enabled'])
         with self.assertRaisesRegex(ValueError, 'disabled in add-on settings'):
             self.module.start_release_sync()
+
+    def test_release_import_accepts_standard_intoto_jsonl_provenance(self):
+        from release_catalog import ASSET_SUFFIXES
+        self.assertIn('.jsonl', ASSET_SUFFIXES)
 
     def test_incompatible_sqlite_schema_requires_clean_seed(self):
         with tempfile.TemporaryDirectory() as directory:
