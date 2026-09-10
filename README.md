@@ -30,7 +30,9 @@ panel. Port 8443 must be reachable by managed devices.
 The default source is `IanW6374/IoT-Modular-Device`. Enable GitHub Release
 synchronization in the add-on settings, then use **Synchronize GitHub
 Releases**, inspect the verified inventory, then promote a release to Stable,
-Beta or Alpha. Descriptors are served without caching; immutable bundles are cached.
+Beta or Alpha. Promotion prefers the universal bundle for automatic upgrades
+and retains application/core descriptors for setup and recovery. Descriptors
+are served without caching; immutable bundles are cached.
 Optional automatic promotion is disabled by default. Enroll devices with a CA,
 client certificate and client key from `/ssl`, then provision the displayed
 shared Management Suite verification public key on each device.

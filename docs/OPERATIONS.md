@@ -34,9 +34,12 @@ An import succeeds only when:
 Imported assets are moved atomically from an incoming directory into
 `/share/iot-md-releases/bundles`. Promotion signs a format-3 Stable, Beta or Alpha
 catalog with the shared Management Suite key and writes `latest.json` atomically.
-Devices verify that fleet/catalog key first, then independently verify the selected
-bundle with their immutable update key. Automatic Stable/Beta promotion is
-optional and off by default.
+When a verified universal bundle is present, it is advertised first so automatic
+device upgrades use the same paired transaction as a manual universal upload.
+The application and core descriptors remain in the catalog for setup and
+recovery. Devices verify the fleet/catalog key first, then independently verify
+the selected bundle with their immutable update key. Automatic Stable/Beta
+promotion is optional and off by default.
 
 Configure `release_base_url` to the exact HTTPS host and port covered by the
 add-on TLS certificate. Install the same issuing CA as the device's

@@ -26,7 +26,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.4', addon)
+        self.assertIn('version: 2.2.5', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
@@ -218,9 +218,32 @@ class FleetAddonTests(unittest.TestCase):
 
         app = bundle('application-2.3.0.iotapp', b'IOTA1\n', app_manifest, app_payload)
         core = bundle('iotmd-core-2.3.0.iotcore', b'IOTC1\n', core_manifest, core_payload)
+        universal_payload = core.read_bytes() + app.read_bytes()
+        universal_manifest = sign_manifest('iotuni', {
+            'format_version': 3, 'target_board': 'esp32-s3',
+            'version': '2.3.0', 'release_sequence': 23000,
+            'firmware': {
+                'version': '2.3.0', 'release_sequence': 23000,
+                'size': core.stat().st_size,
+                'sha256': hashlib.sha256(core.read_bytes()).hexdigest(),
+            },
+            'application': {
+                'version': '2.3.0', 'release_sequence': 23000,
+                'size': app.stat().st_size,
+                'sha256': hashlib.sha256(app.read_bytes()).hexdigest(),
+            },
+            'activation_order': ['application', 'firmware'],
+            'maintenance_required': False, 'rollback_policy': 'paired',
+            'trial_timeout_s': 180,
+        })
+        universal = bundle(
+            'universal-2.3.0.iotuni', b'IOTU1\n', universal_manifest,
+            universal_payload
+        )
         verifier = ArtifactVerifier(update_public_path)
         app_details = verifier.verify(app)
         core_details = verifier.verify(core)
+        universal_details = verifier.verify(universal)
         signer = CatalogSigner(root / 'catalog.pem', root / 'catalog.bin')
         catalog = ReleaseCatalog(
             root / 'state.json', root / 'site', verifier, signer,
@@ -237,14 +260,21 @@ class FleetAddonTests(unittest.TestCase):
                 'firmware': {key: core_details[key] for key in (
                     'kind', 'version', 'release_sequence', 'size', 'sha256'
                 )} | {'name': core.name},
+                'universal': {key: universal_details[key] for key in (
+                    'kind', 'version', 'release_sequence', 'size', 'sha256'
+                )} | {'name': universal.name},
             },
         }]
         catalog._save()
         catalog.promote('v2.3.0', 'stable')
         document = json.loads((root / 'site/stable/latest.json').read_text())
         self.assertEqual(document['format_version'], 3)
-        self.assertEqual(len(document['releases']), 2)
-        self.assertEqual(document['releases'][0]['type'], 'application')
+        self.assertEqual(len(document['releases']), 3)
+        self.assertEqual(document['type'], 'universal')
+        self.assertEqual(
+            [release['type'] for release in document['releases']],
+            ['universal', 'application', 'firmware'],
+        )
         catalog_public = root.joinpath('catalog.bin').read_bytes()
         public_key = ec.EllipticCurvePublicNumbers(
             int.from_bytes(catalog_public[:32], 'big'),

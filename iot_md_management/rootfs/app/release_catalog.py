@@ -517,20 +517,33 @@ class ReleaseCatalog:
                 self._save()
                 return {'tag': tag, 'channel': '', 'catalog': ''}
             descriptors = []
-            for kind in ('application', 'firmware'):
+            assets = release.get('assets', {})
+            kinds = (
+                ('universal', 'application', 'firmware')
+                if assets.get('universal') else ('application', 'firmware')
+            )
+            manifests = {
+                kind: self.verifier.verify(
+                    self.release_root / 'bundles' / assets[kind]['name']
+                )['manifest'] for kind in kinds
+            }
+            for kind in kinds:
                 asset = release.get('assets', {}).get(kind)
                 if not asset:
                     raise ValueError('release has no verified ' + kind + ' bundle')
-                manifest = self.verifier.verify(self.release_root / 'bundles' / asset['name'])['manifest']
+                manifest = manifests[kind]
+                compatibility = (
+                    manifests['application'] if kind == 'universal' else manifest
+                )
                 descriptor = {
                     'format_version': 3, 'target_board': TARGET_BOARD,
                     'channel': channel, 'type': kind, 'version': release['version'],
                     'release_sequence': int(release['release_sequence']),
                     'url': self.base_url + '/bundles/' + asset['name'],
                     'size': int(asset['size']), 'sha256': asset['sha256'],
-                    'minimum_core_api': int(manifest.get('minimum_core_api', 9)),
-                    'minimum_config_api': int(manifest.get('minimum_config_api', 3)),
-                    'maximum_config_api': int(manifest.get('maximum_config_api', 3)),
+                    'minimum_core_api': int(compatibility.get('minimum_core_api', 9)),
+                    'minimum_config_api': int(compatibility.get('minimum_config_api', 3)),
+                    'maximum_config_api': int(compatibility.get('maximum_config_api', 3)),
                     'notes': 'GitHub ' + release['tag'] + ' · Source: ' + release['source_revision'],
                     'published_at': release.get('published_at') or datetime.now(
                         timezone.utc

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.5
+
+- Prefer the verified universal artifact in promoted release catalogs so
+  automatic device upgrades use the same paired staging, activation and
+  rollback transaction as manual universal uploads.
+- Retain signed application and core descriptors in the catalog for setup and
+  recovery workflows.
+
 ## 2.2.4
 
 - Accept standard in-toto provenance assets ending in `.intoto.jsonl` during
