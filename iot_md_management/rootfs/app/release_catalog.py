@@ -456,16 +456,21 @@ class ReleaseCatalog:
             shutil.rmtree(incoming, ignore_errors=True)
 
     def sync(self):
-        url = 'https://api.github.com/repos/' + self.source_repo + '/releases?per_page=50'
+        url = 'https://api.github.com/repos/' + self.source_repo + '/releases?per_page=100'
         try:
             with self.opener(self._request(url), timeout=30) as response:
                 releases = json.loads(response.read())
             if not isinstance(releases, list):
                 raise ValueError('GitHub Releases response is invalid')
             imported = []
+            removed = []
             errors = []
             with self.lock:
                 known = {item['tag']: item for item in self.state['releases']}
+                remote_tags = {
+                    str(item.get('tag_name', '')) for item in releases
+                    if not item.get('draft')
+                }
                 for release in releases:
                     if release.get('draft'):
                         continue
@@ -481,6 +486,32 @@ class ReleaseCatalog:
                     record['channels'] = list(previous.get('channels', []))
                     known[tag] = record
                     imported.append(tag)
+                removed_records = []
+                if len(releases) < 100:
+                    for tag in tuple(known):
+                        if tag not in remote_tags:
+                            removed_records.append(known.pop(tag))
+                            removed.append(tag)
+                retained_names = set()
+                retained_channels = set()
+                for item in known.values():
+                    retained_channels.update(item.get('channels', []))
+                    retained_names.update(
+                        details.get('name', '')
+                        for details in item.get('assets', {}).values()
+                    )
+                    retained_names.update((item.get('provenance', ''), item.get('sbom', '')))
+                for item in removed_records:
+                    for channel in set(item.get('channels', [])) - retained_channels:
+                        if channel in ('stable', 'beta', 'alpha'):
+                            (self.release_root / channel / 'latest.json').unlink(missing_ok=True)
+                    filenames = [
+                        details.get('name', '')
+                        for details in item.get('assets', {}).values()
+                    ] + [item.get('provenance', ''), item.get('sbom', '')]
+                    for name in filenames:
+                        if name and name not in retained_names and Path(name).name == name:
+                            (self.release_root / 'bundles' / name).unlink(missing_ok=True)
                 self.state['releases'] = sorted(
                     known.values(), key=lambda item: (
                         int(item.get('release_sequence', 0)), item.get('tag', '')
@@ -489,7 +520,7 @@ class ReleaseCatalog:
                 self.state['last_sync'] = int(self.now())
                 self.state['last_error'] = '; '.join(errors)[:2048]
                 self._save()
-            return {'imported': imported, 'errors': errors, 'inventory': self.snapshot()}
+            return {'imported': imported, 'removed': removed, 'errors': errors, 'inventory': self.snapshot()}
         except Exception as exc:
             with self.lock:
                 self.state['last_sync'] = int(self.now())

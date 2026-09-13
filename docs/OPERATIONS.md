@@ -41,6 +41,12 @@ recovery. Devices verify the fleet/catalog key first, then independently verify
 the selected bundle with their immutable update key. Automatic Stable/Beta
 promotion is optional and off by default.
 
+A successful synchronization also removes inventory entries that no longer
+exist in the authoritative GitHub Releases response. Unreferenced local assets
+and channel catalogs that point to a deleted release are removed at the same
+time. A full 100-release response is treated as potentially paginated and does
+not trigger deletion reconciliation.
+
 Configure `release_base_url` to the exact HTTPS host and port covered by the
 add-on TLS certificate. Install the same issuing CA as the device's
 Release-server trusted CA. Download the Management Suite public key from the

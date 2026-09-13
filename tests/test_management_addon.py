@@ -1,5 +1,6 @@
 import importlib.util
 import hashlib
+import io
 import json
 import os
 import sqlite3
@@ -26,7 +27,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.5', addon)
+        self.assertIn('version: 2.2.6', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
@@ -67,6 +68,46 @@ class FleetAddonTests(unittest.TestCase):
         self.assertFalse(self.module.RELEASE_SYNC_STATE['enabled'])
         with self.assertRaisesRegex(ValueError, 'disabled in add-on settings'):
             self.module.start_release_sync()
+
+    def test_release_sync_removes_github_deleted_inventory_and_assets(self):
+        from release_catalog import ReleaseCatalog
+        root = Path(self.temp.name) / 'sync-reconcile'
+        requested = []
+
+        def opener(request, timeout=0):
+            requested.append(request.full_url)
+            return io.BytesIO(b'[]')
+
+        catalog = ReleaseCatalog(
+            root / 'inventory.json', root / 'site', None, None,
+            'IanW6374/IoT-Modular-Device', 'https://updates.example:8443',
+            opener=opener,
+        )
+        files = (
+            'application-1.0.iotapp', 'iotmd-core-1.0.iotcore',
+            'provenance-1.0.intoto.jsonl', 'sbom-1.0.cdx.json',
+        )
+        for name in files:
+            (root / 'site' / 'bundles' / name).write_bytes(b'old')
+        (root / 'site' / 'alpha' / 'latest.json').write_text('{}')
+        catalog.state['releases'] = [{
+            'tag': 'v1.0.0', 'version': '1.0.0', 'verified': True,
+            'release_sequence': 100, 'channels': ['alpha'],
+            'assets': {
+                'application': {'name': files[0]},
+                'firmware': {'name': files[1]},
+            },
+            'provenance': files[2], 'sbom': files[3],
+        }]
+
+        result = catalog.sync()
+
+        self.assertEqual(result['removed'], ['v1.0.0'])
+        self.assertEqual(result['inventory']['releases'], [])
+        self.assertIn('per_page=100', requested[0])
+        for name in files:
+            self.assertFalse((root / 'site' / 'bundles' / name).exists())
+        self.assertFalse((root / 'site' / 'alpha' / 'latest.json').exists())
 
     def test_release_import_accepts_standard_intoto_jsonl_provenance(self):
         from release_catalog import ASSET_SUFFIXES

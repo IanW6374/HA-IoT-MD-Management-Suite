@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.6
+
+- Reconcile verified inventory with the authoritative GitHub Releases list on
+  synchronization, removing deleted releases, their unreferenced local assets
+  and any channel catalog that still points to a deleted release.
+- Retain the existing inventory without deletion when GitHub returns a full
+  100-release page because the response may be incomplete.
+
 ## 2.2.5
 
 - Prefer the verified universal artifact in promoted release catalogs so

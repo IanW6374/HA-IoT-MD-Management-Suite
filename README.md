@@ -10,6 +10,10 @@ synchronization and a dedicated HTTPS release endpoint. It imports `.iotapp`,
 payload hashes, release sequence, SLSA provenance and SBOM. The offline IoT MD
 update-signing private key is never installed in Home Assistant.
 
+Successful synchronization treats the GitHub Releases list as authoritative:
+releases deleted upstream are removed from verified inventory together with
+their unreferenced local files and obsolete channel catalogs.
+
 ## Install
 
 Version 2.2.0 uses the clean `iot_md_management` application identity. Remove
