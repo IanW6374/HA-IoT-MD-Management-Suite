@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.2.7
+
+- Retain the eight newest promoted versions in each release channel so current
+  devices can offer an authenticated automatic-upgrade version selector.
+- Continue publishing the newest promoted version through `latest.json` for
+  compatibility with existing devices, and expose the bounded inventory through
+  the read-only TLS `versions.json` endpoint.
+- Rebuild both channel documents when a promoted release is moved, unpromoted
+  or removed during GitHub reconciliation, and migrate existing promoted
+  channels automatically when the updated add-on starts.
+
 ## 2.2.6
 
 - Reconcile verified inventory with the authoritative GitHub Releases list on

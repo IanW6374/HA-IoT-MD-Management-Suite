@@ -27,7 +27,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.6', addon)
+        self.assertIn('version: 2.2.7', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
@@ -37,6 +37,8 @@ class FleetAddonTests(unittest.TestCase):
         )
         self.assertTrue((root / 'iot_md_management/Dockerfile').is_file())
         self.assertTrue((root / 'iot_md_management/translations/en.yaml').is_file())
+        nginx = (root / 'iot_md_management/rootfs/etc/nginx/nginx.conf.template').read_text()
+        self.assertIn('(latest|versions)[.]json', nginx)
 
     def test_ingress_uses_shared_iot_brand_shell(self):
         self.assertIn('<header class="topbar">', self.module.HTML)
@@ -309,7 +311,11 @@ class FleetAddonTests(unittest.TestCase):
         catalog._save()
         catalog.promote('v2.3.0', 'stable')
         document = json.loads((root / 'site/stable/latest.json').read_text())
+        inventory = json.loads((root / 'site/stable/versions.json').read_text())
         self.assertEqual(document['format_version'], 3)
+        self.assertEqual(inventory['format_version'], 1)
+        self.assertEqual(inventory['channel'], 'stable')
+        self.assertEqual(inventory['catalogs'], [document])
         self.assertEqual(len(document['releases']), 3)
         self.assertEqual(document['type'], 'universal')
         self.assertEqual(
@@ -331,8 +337,33 @@ class FleetAddonTests(unittest.TestCase):
             ec.ECDSA(hashes.SHA256()),
         )
         self.assertEqual(catalog.state['releases'][0]['channels'], ['stable'])
+        (root / 'site/stable/versions.json').unlink()
+        catalog = ReleaseCatalog(
+            root / 'state.json', root / 'site', verifier,
+            CatalogSigner(root / 'catalog.pem', root / 'catalog.bin'),
+            'IanW6374/IoT-Modular-Device', 'https://updates.example:8443',
+        )
+        self.assertTrue((root / 'site/stable/versions.json').is_file())
+        older = json.loads(json.dumps(catalog.state['releases'][0]))
+        older.update({
+            'tag': 'v2.2.0', 'version': '2.2.0',
+            'release_sequence': 22000, 'channels': [],
+        })
+        catalog.state['releases'].append(older)
+        catalog.promote('v2.2.0', 'stable')
+        inventory = json.loads((root / 'site/stable/versions.json').read_text())
+        self.assertEqual(
+            [item['version'] for item in inventory['catalogs']],
+            ['2.3.0', '2.2.0'],
+        )
+        self.assertEqual(
+            json.loads((root / 'site/stable/latest.json').read_text())['version'],
+            '2.3.0',
+        )
+        catalog.promote('v2.2.0', 'none')
         catalog.promote('v2.3.0', 'beta')
         self.assertFalse((root / 'site/stable/latest.json').exists())
+        self.assertFalse((root / 'site/stable/versions.json').exists())
         self.assertTrue((root / 'site/beta/latest.json').exists())
         self.assertEqual(catalog.state['releases'][0]['channels'], ['beta'])
         catalog.promote('v2.3.0', 'alpha')

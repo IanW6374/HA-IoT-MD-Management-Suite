@@ -33,6 +33,7 @@ TYPE_NAMES = {
 ASSET_SUFFIXES = ('.iotapp', '.iotcore', '.iotuni', '.json', '.jsonl')
 SOURCE_MARKER = b'IoTMD_SOURCE_REVISION:'
 MAX_ASSET_BYTES = 16 * 1024 * 1024
+MAX_CHANNEL_VERSIONS = 8
 VERSION_PATTERN = re.compile(r'^v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)$')
 
 
@@ -303,6 +304,9 @@ class ReleaseCatalog:
             self.release_root.joinpath(channel).mkdir(parents=True, exist_ok=True)
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.state = self._load()
+        for channel in ('stable', 'beta', 'alpha'):
+            if any(channel in item.get('channels', []) for item in self.state['releases']):
+                self._write_channel(channel)
 
     def _empty(self):
         return {'format_version': 1, 'last_sync': 0, 'last_error': '', 'releases': []}
@@ -324,6 +328,93 @@ class ReleaseCatalog:
     def snapshot(self):
         with self.lock:
             return json.loads(json.dumps(self.state))
+
+    def _release_descriptors(self, release, channel):
+        descriptors = []
+        assets = release.get('assets', {})
+        kinds = (
+            ('universal', 'application', 'firmware')
+            if assets.get('universal') else ('application', 'firmware')
+        )
+        manifests = {
+            kind: self.verifier.verify(
+                self.release_root / 'bundles' / assets[kind]['name']
+            )['manifest'] for kind in kinds
+        }
+        for kind in kinds:
+            asset = assets.get(kind)
+            if not asset:
+                raise ValueError('release has no verified ' + kind + ' bundle')
+            manifest = manifests[kind]
+            compatibility = (
+                manifests['application'] if kind == 'universal' else manifest
+            )
+            descriptor = {
+                'format_version': 3, 'target_board': TARGET_BOARD,
+                'channel': channel, 'type': kind, 'version': release['version'],
+                'release_sequence': int(release['release_sequence']),
+                'url': self.base_url + '/bundles/' + asset['name'],
+                'size': int(asset['size']), 'sha256': asset['sha256'],
+                'minimum_core_api': int(compatibility.get('minimum_core_api', 9)),
+                'minimum_config_api': int(compatibility.get('minimum_config_api', 3)),
+                'maximum_config_api': int(compatibility.get('maximum_config_api', 3)),
+                'notes': 'GitHub ' + release['tag'] + ' · Source: ' + release['source_revision'],
+                'published_at': release.get('published_at') or datetime.now(
+                    timezone.utc
+                ).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
+                'signature_scheme': SIGNATURE_SCHEME,
+            }
+            if kind == 'application':
+                descriptor['components'] = manifest.get('components', {})
+            descriptors.append(self.signer.sign(descriptor))
+        return descriptors
+
+    def _write_channel(self, channel):
+        promoted = sorted(
+            (
+                release for release in self.state['releases']
+                if channel in release.get('channels', [])
+            ),
+            key=lambda item: (
+                int(item.get('release_sequence', 0)), item.get('tag', '')
+            ), reverse=True
+        )[:MAX_CHANNEL_VERSIONS]
+        directory = self.release_root / channel
+        latest_target = directory / 'latest.json'
+        versions_target = directory / 'versions.json'
+        if not promoted:
+            latest_target.unlink(missing_ok=True)
+            versions_target.unlink(missing_ok=True)
+            return ''
+        catalogs = []
+        versions = set()
+        sequences = set()
+        for release in promoted:
+            version = str(release.get('version', ''))
+            sequence = int(release.get('release_sequence', 0))
+            if version in versions or sequence in sequences:
+                raise ValueError('release channel contains an ambiguous version or sequence')
+            versions.add(version)
+            sequences.add(sequence)
+            descriptors = self._release_descriptors(release, channel)
+            catalog = dict(descriptors[0])
+            catalog['releases'] = descriptors
+            catalogs.append(catalog)
+        inventory = {
+            'format_version': 1,
+            'channel': channel,
+            'generated_at': datetime.now(timezone.utc).replace(
+                microsecond=0
+            ).isoformat().replace('+00:00', 'Z'),
+            'catalogs': catalogs,
+        }
+        for target, document in (
+            (latest_target, catalogs[0]), (versions_target, inventory)
+        ):
+            temporary = target.with_suffix('.tmp')
+            temporary.write_text(json.dumps(document, indent=2) + '\n')
+            os.replace(temporary, target)
+        return str(latest_target)
 
     def _request(self, url, accept='application/vnd.github+json'):
         headers = {
@@ -467,6 +558,7 @@ class ReleaseCatalog:
             errors = []
             with self.lock:
                 known = {item['tag']: item for item in self.state['releases']}
+                affected_channels = set()
                 remote_tags = {
                     str(item.get('tag_name', '')) for item in releases
                     if not item.get('draft')
@@ -484,6 +576,7 @@ class ReleaseCatalog:
                         continue
                     previous = known.get(tag, {})
                     record['channels'] = list(previous.get('channels', []))
+                    affected_channels.update(record['channels'])
                     known[tag] = record
                     imported.append(tag)
                 removed_records = []
@@ -502,9 +595,7 @@ class ReleaseCatalog:
                     )
                     retained_names.update((item.get('provenance', ''), item.get('sbom', '')))
                 for item in removed_records:
-                    for channel in set(item.get('channels', [])) - retained_channels:
-                        if channel in ('stable', 'beta', 'alpha'):
-                            (self.release_root / channel / 'latest.json').unlink(missing_ok=True)
+                    affected_channels.update(item.get('channels', []))
                     filenames = [
                         details.get('name', '')
                         for details in item.get('assets', {}).values()
@@ -519,6 +610,9 @@ class ReleaseCatalog:
                 )
                 self.state['last_sync'] = int(self.now())
                 self.state['last_error'] = '; '.join(errors)[:2048]
+                for channel in affected_channels:
+                    if channel in ('stable', 'beta', 'alpha'):
+                        self._write_channel(channel)
                 self._save()
             return {'imported': imported, 'removed': removed, 'errors': errors, 'inventory': self.snapshot()}
         except Exception as exc:
@@ -540,64 +634,15 @@ class ReleaseCatalog:
                 raise ValueError('release has not been imported and verified')
             previous_channels = set(release.get('channels', []))
             if channel in ('', 'none'):
-                for previous in previous_channels:
-                    (self.release_root / previous / 'latest.json').unlink(
-                        missing_ok=True
-                    )
                 release['channels'] = []
+                for previous in previous_channels:
+                    self._write_channel(previous)
                 self._save()
                 return {'tag': tag, 'channel': '', 'catalog': ''}
-            descriptors = []
-            assets = release.get('assets', {})
-            kinds = (
-                ('universal', 'application', 'firmware')
-                if assets.get('universal') else ('application', 'firmware')
-            )
-            manifests = {
-                kind: self.verifier.verify(
-                    self.release_root / 'bundles' / assets[kind]['name']
-                )['manifest'] for kind in kinds
-            }
-            for kind in kinds:
-                asset = release.get('assets', {}).get(kind)
-                if not asset:
-                    raise ValueError('release has no verified ' + kind + ' bundle')
-                manifest = manifests[kind]
-                compatibility = (
-                    manifests['application'] if kind == 'universal' else manifest
-                )
-                descriptor = {
-                    'format_version': 3, 'target_board': TARGET_BOARD,
-                    'channel': channel, 'type': kind, 'version': release['version'],
-                    'release_sequence': int(release['release_sequence']),
-                    'url': self.base_url + '/bundles/' + asset['name'],
-                    'size': int(asset['size']), 'sha256': asset['sha256'],
-                    'minimum_core_api': int(compatibility.get('minimum_core_api', 9)),
-                    'minimum_config_api': int(compatibility.get('minimum_config_api', 3)),
-                    'maximum_config_api': int(compatibility.get('maximum_config_api', 3)),
-                    'notes': 'GitHub ' + release['tag'] + ' · Source: ' + release['source_revision'],
-                    'published_at': release.get('published_at') or datetime.now(
-                        timezone.utc
-                    ).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
-                    'signature_scheme': SIGNATURE_SCHEME,
-                }
-                if kind == 'application':
-                    descriptor['components'] = manifest.get('components', {})
-                descriptors.append(self.signer.sign(descriptor))
-            index = dict(descriptors[0])
-            index['releases'] = descriptors
-            target = self.release_root / channel / 'latest.json'
-            temporary = target.with_suffix('.tmp')
-            temporary.write_text(json.dumps(index, indent=2) + '\n')
-            os.replace(temporary, target)
             for previous in previous_channels - {channel}:
-                (self.release_root / previous / 'latest.json').unlink(
-                    missing_ok=True
-                )
-            for item in self.state['releases']:
-                channels = set(item.get('channels', []))
-                channels.discard(channel)
-                item['channels'] = sorted(channels)
+                release['channels'] = []
+                self._write_channel(previous)
             release['channels'] = [channel]
+            target = self._write_channel(channel)
             self._save()
-            return {'tag': tag, 'channel': channel, 'catalog': str(target)}
+            return {'tag': tag, 'channel': channel, 'catalog': target}

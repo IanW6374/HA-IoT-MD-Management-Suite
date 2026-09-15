@@ -34,6 +34,9 @@ An import succeeds only when:
 Imported assets are moved atomically from an incoming directory into
 `/share/iot-md-releases/bundles`. Promotion signs a format-3 Stable, Beta or Alpha
 catalog with the shared Management Suite key and writes `latest.json` atomically.
+Each channel retains its eight newest promoted versions in `versions.json`; every
+entry contains the same independently signed descriptors, while `latest.json`
+continues to expose the newest version to older devices.
 When a verified universal bundle is present, it is advertised first so automatic
 device upgrades use the same paired transaction as a manual universal upload.
 The application and core descriptors remain in the catalog for setup and
@@ -62,6 +65,6 @@ paths atomically. Retention bounds stored events but does not delete release
 artifacts.
 
 Only `GET` and `HEAD` are accepted on port 8443. The listener exposes channel
-`latest.json` descriptors and immutable files below `/bundles`; all other paths
-return 404. Release administration and file browsing are available only through
-Home Assistant-authenticated Ingress.
+`latest.json` descriptors, bounded `versions.json` inventories and immutable files
+below `/bundles`; all other paths return 404. Release administration and file
+browsing are available only through Home Assistant-authenticated Ingress.
