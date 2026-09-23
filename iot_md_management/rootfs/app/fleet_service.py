@@ -1,5 +1,6 @@
 """Fleet polling, policy application, and rollout use cases."""
 
+import http.client
 import json
 import os
 import ssl
@@ -9,6 +10,23 @@ import urllib.request
 
 def bounded_text(value, maximum=256):
     return str(value or '')[:maximum]
+
+
+def device_connection_error(exc):
+    if isinstance(exc, http.client.RemoteDisconnected):
+        return (
+            'Device closed the connection before an HTTP response. Verify that '
+            'the configured client certificate is enrolled on the device, is '
+            'valid for client authentication, and has the read scope.'
+        )
+    if isinstance(exc, ssl.SSLCertVerificationError):
+        return 'Device TLS certificate verification failed: ' + str(exc)
+    if isinstance(exc, ssl.SSLError):
+        return (
+            'Mutual TLS handshake failed. Verify the CA, client certificate and '
+            'client key paths: ' + str(exc)
+        )
+    return bounded_text(exc, 256)
 
 
 class DeviceClient:
@@ -57,7 +75,7 @@ class FleetController:
                 '/api/v2/events?cursor=' + str(cursor) + '&limit=64'
             )
         except Exception as exc:
-            self.store.set_device_error(identifier, bounded_text(exc, 256))
+            self.store.set_device_error(identifier, device_connection_error(exc))
             return
         self.store.record_poll(identifier, inventory, health, events)
 

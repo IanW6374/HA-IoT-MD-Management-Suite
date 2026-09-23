@@ -208,6 +208,16 @@ class FleetRepository:
                 'SELECT COUNT(*) FROM devices'
             ).fetchone()[0])
 
+    def delete_device(self, identifier):
+        identifier = str(identifier)
+        with self.lock, self.connection:
+            cursor = self.connection.execute(
+                'DELETE FROM devices WHERE id=?', (identifier,)
+            )
+        if cursor.rowcount != 1:
+            raise ValueError('device is not registered')
+        return {'deleted': True, 'id': identifier}
+
     def set_device_error(self, identifier, detail):
         with self.lock, self.connection:
             self.connection.execute(

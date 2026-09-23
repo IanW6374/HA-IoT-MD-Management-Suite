@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.2.8
+
+- Show newly registered devices as Connecting until their first successful poll,
+  and add an explicit retry action.
+- Allow administrators to remove a registered device and its collected events.
+- Add concrete enrollment examples for device identity, host and certificate
+  paths.
+- Replace the opaque remote-disconnect message with guidance to verify that the
+  Management Suite client certificate is enrolled for client authentication and
+  has the device API `read` scope.
+
 ## 2.2.7
 
 - Retain the eight newest promoted versions in each release channel so current

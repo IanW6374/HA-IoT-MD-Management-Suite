@@ -27,7 +27,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.7', addon)
+        self.assertIn('version: 2.2.8', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
@@ -53,6 +53,24 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('setReleaseChannel(this)', self.module.HTML)
         self.assertNotIn('Promote stable', self.module.HTML)
         self.assertNotIn('Promote beta', self.module.HTML)
+
+    def test_device_enrollment_has_guidance_and_management_actions(self):
+        self.assertIn('placeholder="e.g. IoT-MD-002"', self.module.HTML)
+        self.assertIn('without https://', self.module.HTML)
+        self.assertIn('Retry connection', self.module.HTML)
+        self.assertIn('Remove device', self.module.HTML)
+        self.assertIn("status.textContent='Connecting'", self.module.HTML)
+
+    def test_remote_disconnect_explains_client_certificate_requirements(self):
+        import http.client
+        from fleet_service import device_connection_error
+
+        detail = device_connection_error(
+            http.client.RemoteDisconnected('closed without response')
+        )
+
+        self.assertIn('client certificate is enrolled', detail)
+        self.assertIn('read scope', detail)
 
     def test_portal_sections_have_distinct_routes_and_active_tabs(self):
         self.assertEqual(
@@ -385,6 +403,28 @@ class FleetAddonTests(unittest.TestCase):
         self.assertNotIn('key_path', result)
         self.assertNotIn('cert_path', result)
         self.assertEqual(result['host'], 'device.local')
+
+    def test_registered_device_can_be_deleted_with_its_events(self):
+        store = self.module.FleetStore(Path(self.temp.name) / 'delete.db')
+        self.addCleanup(store.close)
+        store.register({
+            'id': 'device-1', 'host': 'device.local',
+            'ca_path': '/ssl/ca.pem', 'cert_path': '/ssl/client.pem',
+            'key_path': '/ssl/client-key.pem',
+        })
+        store.record_poll(
+            'device-1', {'device': {}}, {},
+            {'cursor': 1, 'events': [{'id': 1, 'kind': 'boot'}]},
+        )
+
+        self.assertEqual(
+            store.delete_device('device-1'),
+            {'deleted': True, 'id': 'device-1'},
+        )
+        self.assertIsNone(store.get_device('device-1'))
+        self.assertEqual(store.list_events(), [])
+        with self.assertRaisesRegex(ValueError, 'not registered'):
+            store.delete_device('device-1')
 
     def test_rollout_advances_by_cohort_and_stops_at_failure_threshold(self):
         store = self.module.FleetStore(Path(self.temp.name) / 'rollout.json')
