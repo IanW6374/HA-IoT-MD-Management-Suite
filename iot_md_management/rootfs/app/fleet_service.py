@@ -92,6 +92,21 @@ class FleetController:
         record = self.store.get_device(target, public=False)
         if not record:
             raise ValueError('device is not registered')
+        device_target = str(
+            (record.get('inventory') or {}).get('device', {}).get('device_id') or
+            (record.get('fleet') or {}).get('device_id') or ''
+        )
+        if not device_target:
+            self.poll_device(target)
+            record = self.store.get_device(target, public=False)
+            device_target = str(
+                (record.get('inventory') or {}).get('device', {}).get('device_id') or
+                (record.get('fleet') or {}).get('device_id') or ''
+            )
+        if not device_target:
+            raise ValueError(
+                'device identity is unavailable; complete a successful poll first'
+            )
         command = request.get('command') or None
         commands = [] if not command else [{
             'id': bounded_text(command.get('id') or os.urandom(8).hex(), 64),
@@ -104,7 +119,7 @@ class FleetController:
             'policy_sequence': self.store.next_policy_sequence(),
             'issued_at': now - 5, 'not_before': now - 5,
             'expires_at': now + int(request.get('valid_for_s', 86400)),
-            'target_device': target, 'target_cohort': '',
+            'target_device': device_target, 'target_cohort': '',
             'maintenance': {
                 'weekdays': request.get('weekdays', [0, 1, 2, 3, 4, 5, 6]),
                 'start_minute': int(request.get('start_minute', 120)),

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.10
+
+- Target signed policies with the immutable Device API `device_id` discovered
+  from inventory instead of the Management Suite's friendly record ID.
+- Clarify that Management ID is a local label and require a successful inventory
+  poll before a policy can be signed for a device whose identity is unknown.
+
 ## 2.2.9
 
 - Configure the Device API CA, fleet client certificate and client key once in

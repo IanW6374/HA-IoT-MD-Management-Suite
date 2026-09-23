@@ -7,6 +7,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -27,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.9', addon)
+        self.assertIn('version: 2.2.10', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
@@ -62,6 +63,8 @@ class FleetAddonTests(unittest.TestCase):
         self.assertNotIn('name="cert_path"', self.module.HTML)
         self.assertNotIn('name="key_path"', self.module.HTML)
         self.assertIn('add-on configuration', self.module.HTML)
+        self.assertIn('Management ID', self.module.HTML)
+        self.assertIn('immutable device identity', self.module.HTML)
         self.assertIn('Retry connection', self.module.HTML)
         self.assertIn("button.textContent='Retrying…'", self.module.HTML)
         self.assertIn("button.textContent=failed?'Retry failed':'Connected'", self.module.HTML)
@@ -104,6 +107,43 @@ class FleetAddonTests(unittest.TestCase):
 
         self.assertIn('client certificate is enrolled', detail)
         self.assertIn('read scope', detail)
+
+    def test_policy_targets_discovered_immutable_device_identity(self):
+        from fleet_service import FleetController
+
+        record = {
+            'id': 'IoT-MD-002', 'host': 'iot-md-002.local', 'port': 8444,
+            'enabled': True, 'cohort': 'default',
+            'inventory': {'device': {'device_id': '3cdc755be290'}},
+            'fleet': {'device_id': '3cdc755be290'},
+        }
+
+        class Store:
+            def get_device(self, _identifier, public=True):
+                return dict(record)
+
+            def next_policy_sequence(self):
+                return 1
+
+        class Signer:
+            signed = None
+
+            def sign(self, policy):
+                self.signed = dict(policy)
+                return dict(policy, signature='signed')
+
+        signer = Signer()
+        controller = FleetController(Store(), signer, now=lambda: 2000000000)
+        controller.poll_device = mock.Mock(return_value=record)
+        client = mock.Mock()
+        client.request.return_value = {'accepted': True}
+
+        with mock.patch('fleet_service.DeviceClient', return_value=client):
+            controller.apply_policy({'device_id': 'IoT-MD-002'})
+
+        self.assertEqual(signer.signed['target_device'], '3cdc755be290')
+        self.assertNotEqual(signer.signed['target_device'], 'IoT-MD-002')
+        client.request.assert_called_once()
 
     def test_portal_sections_have_distinct_routes_and_active_tabs(self):
         self.assertEqual(
