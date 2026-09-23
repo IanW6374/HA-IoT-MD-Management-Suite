@@ -54,20 +54,26 @@ class DeviceClient:
 
 
 class FleetController:
-    def __init__(self, store, signer, timeout=10, now=None):
+    def __init__(self, store, signer, timeout=10, now=None, tls=None):
         self.store = store
         self.signer = signer
         self.timeout = int(timeout)
         self.now = now or (lambda: int(time.time()))
+        self.tls = dict(tls or {})
+
+    def _client(self, record):
+        settings = dict(record)
+        settings.update(self.tls)
+        return DeviceClient(settings, self.timeout)
 
     def poll_device(self, identifier):
         record = self.store.get_device(identifier, public=False)
         if not record:
             raise ValueError('device is not registered')
         if not record.get('enabled'):
-            return
+            return self.store.get_device(identifier)
         cursor = int(record.get('event_cursor', 0))
-        client = DeviceClient(record, self.timeout)
+        client = self._client(record)
         try:
             inventory = client.request('/api/v2/device/inventory')
             health = client.request('/api/v2/health')
@@ -76,8 +82,9 @@ class FleetController:
             )
         except Exception as exc:
             self.store.set_device_error(identifier, device_connection_error(exc))
-            return
+            return self.store.get_device(identifier)
         self.store.record_poll(identifier, inventory, health, events)
+        return self.store.get_device(identifier)
 
     def apply_policy(self, request):
         now = self.now()
@@ -119,7 +126,7 @@ class FleetController:
             'commands': commands,
         }
         signed = self.signer.sign(policy)
-        result = DeviceClient(record, self.timeout).request(
+        result = self._client(record).request(
             '/api/v2/fleet/policy', 'POST', signed
         )
         self.poll_device(target)

@@ -27,7 +27,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.8', addon)
+        self.assertIn('version: 2.2.9', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
@@ -55,11 +55,44 @@ class FleetAddonTests(unittest.TestCase):
         self.assertNotIn('Promote beta', self.module.HTML)
 
     def test_device_enrollment_has_guidance_and_management_actions(self):
-        self.assertIn('placeholder="e.g. IoT-MD-002"', self.module.HTML)
+        self.assertIn('placeholder="IoT-MD-002"', self.module.HTML)
         self.assertIn('without https://', self.module.HTML)
+        self.assertNotIn('placeholder="e.g.', self.module.HTML)
+        self.assertNotIn('name="ca_path"', self.module.HTML)
+        self.assertNotIn('name="cert_path"', self.module.HTML)
+        self.assertNotIn('name="key_path"', self.module.HTML)
+        self.assertIn('add-on configuration', self.module.HTML)
         self.assertIn('Retry connection', self.module.HTML)
+        self.assertIn("button.textContent='Retrying…'", self.module.HTML)
+        self.assertIn("button.textContent=failed?'Retry failed':'Connected'", self.module.HTML)
         self.assertIn('Remove device', self.module.HTML)
         self.assertIn("status.textContent='Connecting'", self.module.HTML)
+
+    def test_device_api_identity_is_core_addon_configuration(self):
+        root = Path(__file__).resolve().parents[1]
+        addon = (root / 'iot_md_management/config.yaml').read_text()
+        translation = (root / 'iot_md_management/translations/en.yaml').read_text()
+        for name in (
+            'device_api_ca_path', 'device_api_client_cert_path',
+            'device_api_client_key_path',
+        ):
+            self.assertIn(name + ':', addon)
+            self.assertIn(name + ':', translation)
+
+        from fleet_service import FleetController
+        controller = FleetController(None, None, tls={
+            'ca_path': '/ssl/core-ca.pem',
+            'cert_path': '/ssl/core-client.pem',
+            'key_path': '/ssl/core-key.pem',
+        })
+        client = controller._client({
+            'ca_path': '/ssl/legacy-ca.pem',
+            'cert_path': '/ssl/legacy-client.pem',
+            'key_path': '/ssl/legacy-key.pem',
+        })
+        self.assertEqual(client.record['ca_path'], '/ssl/core-ca.pem')
+        self.assertEqual(client.record['cert_path'], '/ssl/core-client.pem')
+        self.assertEqual(client.record['key_path'], '/ssl/core-key.pem')
 
     def test_remote_disconnect_explains_client_certificate_requirements(self):
         import http.client

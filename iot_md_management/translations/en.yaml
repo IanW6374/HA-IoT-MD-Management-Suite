@@ -11,6 +11,15 @@ configuration:
   request_timeout_s:
     name: Device request timeout
     description: Maximum seconds allowed for a Device API request.
+  device_api_ca_path:
+    name: Device API CA path
+    description: CA bundle in /ssl used to verify every managed IoT-MD Device API.
+  device_api_client_cert_path:
+    name: Device API client certificate path
+    description: Fleet client certificate chain in /ssl used for every managed device.
+  device_api_client_key_path:
+    name: Device API client key path
+    description: Fleet client private key in /ssl used for every managed device.
   event_retention:
     name: Fleet event retention
     description: Maximum number of device events retained in the suite database.

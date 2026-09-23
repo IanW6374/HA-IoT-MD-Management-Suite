@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.2.9
+
+- Configure the Device API CA, fleet client certificate and client key once in
+  the Home Assistant add-on configuration and apply that identity to every
+  managed device. Existing database columns are retained only for upgrade
+  compatibility and no longer override the core settings.
+- Give Retry connection immediate progress and success/failure feedback before
+  refreshing the device card.
+- Remove "e.g." from device enrollment field hints and keep the form focused on
+  device-specific identity, address and cohort values.
+
 ## 2.2.8
 
 - Show newly registered devices as Connecting until their first successful poll,
