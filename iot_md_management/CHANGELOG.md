@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.2.13
+
+- Allow registered devices to be edited in place, including cohort, name,
+  address, port and management-enabled state.
+- Derive controlled-deployment cohorts from enabled device assignments instead
+  of suggesting unrelated `canary,main` values.
+- Put Device before Release in the direct deployment workflow.
+- Add persistent, reusable non-secret configuration profiles and permissioned
+  profile deployment to compatible IoT-MD devices.
+
 ## 2.2.12
 
 - Restore the top-level portal navigation after a malformed deployment status

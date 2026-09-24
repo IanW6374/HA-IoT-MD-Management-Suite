@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.12', addon)
+        self.assertIn('version: 2.2.13', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
@@ -175,6 +175,20 @@ class FleetAddonTests(unittest.TestCase):
         self.assertNotIn('data-page-link="policy"', self.module.HTML)
         self.assertNotIn('data-page-link="rollouts"', self.module.HTML)
         self.assertIn("actions=['check-update','download-update']", self.module.HTML)
+        policy = self.module.HTML.split('<form id="policy">', 1)[1].split('</form>', 1)[0]
+        self.assertLess(policy.index('>Device<'), policy.index('>Release<'))
+        self.assertIn('id="rollout-cohorts"', self.module.HTML)
+        self.assertNotIn('name="cohorts" value="canary,main"', self.module.HTML)
+
+    def test_devices_are_editable_and_profiles_are_first_class(self):
+        self.assertIn('Edit device', self.module.HTML)
+        self.assertIn("method:'PATCH'", self.module.HTML)
+        self.assertIn('data-page-link="profiles"', self.module.HTML)
+        self.assertIn('Configuration profiles', self.module.HTML)
+        self.assertIn('Profiles cannot contain passwords', self.module.HTML)
+        self.assertIn('/api/v2/configuration/profile', Path(
+            self.module.__file__
+        ).with_name('fleet_service.py').read_text())
 
     def test_equal_maintenance_times_mean_all_day(self):
         from fleet_service import maintenance_window
@@ -187,7 +201,7 @@ class FleetAddonTests(unittest.TestCase):
     def test_portal_sections_have_distinct_routes_and_active_tabs(self):
         self.assertEqual(
             set(self.module.PORTAL_PAGES),
-            {'/', '/releases', '/devices', '/deployments', '/settings'},
+            {'/', '/releases', '/devices', '/deployments', '/profiles', '/settings'},
         )
         settings = self.module.render_portal('settings').decode()
         self.assertIn('<body data-page="settings">', settings)
@@ -198,7 +212,7 @@ class FleetAddonTests(unittest.TestCase):
 
     def test_portal_navigation_does_not_depend_on_javascript_for_section_visibility(self):
         self.assertIn('[data-page-section]{display:none}', self.module.HTML)
-        for page in ('overview', 'releases', 'devices', 'deployments', 'settings'):
+        for page in ('overview', 'releases', 'devices', 'deployments', 'profiles', 'settings'):
             self.assertIn(
                 f'body[data-page="{page}"] [data-page-section="{page}"]',
                 self.module.HTML,
@@ -600,6 +614,36 @@ class FleetAddonTests(unittest.TestCase):
         self.assertNotIn('key_path', device)
         self.assertEqual(restored.list_events()[0]['event']['kind'], 'boot')
         self.assertEqual(path.read_bytes()[:16], b'SQLite format 3\x00')
+
+    def test_device_cohort_edit_and_configuration_profiles_persist(self):
+        path = Path(self.temp.name) / 'editable.db'
+        store = self.module.FleetStore(path)
+        store.register({
+            'id': 'device-1', 'name': 'Original', 'host': 'device.local',
+            'cohort': 'default', 'ca_path': '/ssl/ca.pem',
+            'cert_path': '/ssl/client.pem', 'key_path': '/ssl/key.pem',
+        })
+        updated = store.update_device('device-1', {
+            'name': 'Edited', 'cohort': 'canary',
+        })
+        self.assertEqual(updated['name'], 'Edited')
+        self.assertEqual(updated['cohort'], 'canary')
+        private = store.get_device('device-1', public=False)
+        self.assertEqual(private['key_path'], '/ssl/key.pem')
+        profile = store.save_profile({
+            'format_version': 1, 'name': 'Production',
+            'description': 'Common settings',
+            'settings': {
+                'timezone_name': 'Europe/London', 'ha_discovery': True,
+            },
+        })
+        self.assertEqual(profile['settings']['timezone_name'], 'Europe/London')
+        store.close()
+        restored = self.module.FleetStore(path)
+        self.addCleanup(restored.close)
+        self.assertEqual(restored.list_profiles()[0]['name'], 'Production')
+        restored.delete_profile('Production')
+        self.assertEqual(restored.list_profiles(), [])
 
     def test_durable_jobs_are_idempotent_and_retry_with_backoff(self):
         now = [1000]

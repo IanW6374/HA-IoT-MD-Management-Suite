@@ -108,6 +108,12 @@ class FleetRepository:
                 );
                 CREATE INDEX IF NOT EXISTS jobs_due
                     ON jobs(status, not_before, id);
+                CREATE TABLE IF NOT EXISTS profiles (
+                    name TEXT PRIMARY KEY,
+                    description TEXT NOT NULL,
+                    settings TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
             ''')
             self.connection.execute(
                 'INSERT OR IGNORE INTO metadata(key,value) VALUES(?,?)',
@@ -179,6 +185,19 @@ class FleetRepository:
                     enabled=excluded.enabled
             ''', values)
         return self.get_device(identifier)
+
+    def update_device(self, identifier, changes):
+        current = self.get_device(identifier, public=False)
+        if not current:
+            raise ValueError('device is not registered')
+        allowed = {'name', 'host', 'port', 'cohort', 'enabled'}
+        unknown = set(changes) - allowed
+        if unknown:
+            raise ValueError('unsupported device field: ' + sorted(unknown)[0])
+        record = dict(current)
+        record.update(changes)
+        record['id'] = current['id']
+        return self.register(record)
 
     def get_device(self, identifier, public=True):
         with self.lock:
@@ -267,6 +286,49 @@ class FleetRepository:
                 'received_at': row['received_at'],
             })
         return result
+
+    def save_profile(self, profile):
+        with self.lock, self.connection:
+            self.connection.execute('''
+                INSERT INTO profiles(name,description,settings,updated_at)
+                VALUES(?,?,?,?)
+                ON CONFLICT(name) DO UPDATE SET
+                    description=excluded.description,
+                    settings=excluded.settings,
+                    updated_at=excluded.updated_at
+            ''', (
+                profile['name'], profile.get('description', ''),
+                _json(profile['settings']), self.now(),
+            ))
+        return self.get_profile(profile['name'])
+
+    def get_profile(self, name):
+        with self.lock:
+            row = self.connection.execute(
+                'SELECT * FROM profiles WHERE name=?', (str(name),)
+            ).fetchone()
+        if row is None:
+            return None
+        value = dict(row)
+        value['format_version'] = 1
+        value['settings'] = _object(value['settings'], {})
+        return value
+
+    def list_profiles(self):
+        with self.lock:
+            rows = self.connection.execute(
+                'SELECT * FROM profiles ORDER BY name'
+            ).fetchall()
+        return [self.get_profile(row['name']) for row in rows]
+
+    def delete_profile(self, name):
+        with self.lock, self.connection:
+            cursor = self.connection.execute(
+                'DELETE FROM profiles WHERE name=?', (str(name),)
+            )
+        if cursor.rowcount != 1:
+            raise ValueError('configuration profile does not exist')
+        return {'deleted': True, 'name': str(name)}
 
     def next_policy_sequence(self):
         with self.lock, self.connection:

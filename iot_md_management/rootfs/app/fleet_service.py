@@ -121,6 +121,16 @@ class FleetController:
         self.store.record_poll(identifier, inventory, health, events)
         return self.store.get_device(identifier)
 
+    def apply_profile(self, identifier, profile):
+        record = self.store.get_device(identifier, public=False)
+        if not record:
+            raise ValueError('device is not registered')
+        result = self._client(record).request(
+            '/api/v2/configuration/profile', 'POST', profile
+        )
+        self.poll_device(identifier)
+        return result
+
     def apply_policy(self, request):
         now = self.now()
         start_minute, duration_minutes = maintenance_window(request)
