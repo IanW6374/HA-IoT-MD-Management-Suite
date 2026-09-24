@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.10', addon)
+        self.assertIn('version: 2.2.11', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
@@ -139,16 +139,55 @@ class FleetAddonTests(unittest.TestCase):
         client.request.return_value = {'accepted': True}
 
         with mock.patch('fleet_service.DeviceClient', return_value=client):
-            controller.apply_policy({'device_id': 'IoT-MD-002'})
+            controller.apply_policy({
+                'device_id': 'IoT-MD-002',
+                'start_time': '23:00', 'end_time': '01:30',
+                'commands': [
+                    {'action': 'check-update', 'release_sequence': 2765},
+                    {'action': 'download-update', 'release_sequence': 2765},
+                ],
+            })
 
         self.assertEqual(signer.signed['target_device'], '3cdc755be290')
         self.assertNotEqual(signer.signed['target_device'], 'IoT-MD-002')
+        self.assertEqual(signer.signed['maintenance']['start_minute'], 1380)
+        self.assertEqual(signer.signed['maintenance']['duration_minutes'], 150)
+        self.assertEqual(
+            [item['action'] for item in signer.signed['commands']],
+            ['check-update', 'download-update'],
+        )
+        self.assertEqual(signer.signed['commands'][0]['release_sequence'], 2765)
         client.request.assert_called_once()
+
+    def test_policy_form_uses_local_start_and_end_times(self):
+        self.assertIn('name="start_time" type="time"', self.module.HTML)
+        self.assertIn('name="end_time" type="time"', self.module.HTML)
+        self.assertIn("device's configured local timezone", self.module.HTML)
+        self.assertNotIn('name="start_minute"', self.module.HTML)
+        self.assertNotIn('name="duration_minutes"', self.module.HTML)
+
+    def test_deployment_workflow_hides_policy_implementation_details(self):
+        self.assertIn('data-page-link="deployments"', self.module.HTML)
+        self.assertIn('Deploy a verified release', self.module.HTML)
+        self.assertIn('Stage for later installation', self.module.HTML)
+        self.assertIn('Stage and install in the maintenance window', self.module.HTML)
+        self.assertIn('Advanced cohort deployment', self.module.HTML)
+        self.assertNotIn('data-page-link="policy"', self.module.HTML)
+        self.assertNotIn('data-page-link="rollouts"', self.module.HTML)
+        self.assertIn("actions=['check-update','download-update']", self.module.HTML)
+
+    def test_equal_maintenance_times_mean_all_day(self):
+        from fleet_service import maintenance_window
+
+        self.assertEqual(
+            maintenance_window({'start_time': '00:00', 'end_time': '00:00'}),
+            (0, 1440),
+        )
 
     def test_portal_sections_have_distinct_routes_and_active_tabs(self):
         self.assertEqual(
             set(self.module.PORTAL_PAGES),
-            {'/', '/releases', '/devices', '/policy', '/rollouts', '/settings'},
+            {'/', '/releases', '/devices', '/deployments', '/settings'},
         )
         settings = self.module.render_portal('settings').decode()
         self.assertIn('<body data-page="settings">', settings)

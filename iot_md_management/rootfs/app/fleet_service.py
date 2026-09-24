@@ -12,6 +12,33 @@ def bounded_text(value, maximum=256):
     return str(value or '')[:maximum]
 
 
+def clock_minute(value, name):
+    parts = str(value or '').split(':')
+    if len(parts) != 2 or not all(part.isdigit() for part in parts):
+        raise ValueError(name + ' must use HH:MM')
+    hour, minute = (int(part) for part in parts)
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        raise ValueError(name + ' must be a valid time')
+    return hour * 60 + minute
+
+
+def maintenance_window(request):
+    if 'start_time' in request or 'end_time' in request:
+        start = clock_minute(request.get('start_time'), 'maintenance start')
+        end = clock_minute(request.get('end_time'), 'maintenance end')
+        duration = (end - start) % 1440
+        # Equal start and end represents the whole day, not an empty window.
+        duration = duration or 1440
+    else:
+        start = int(request.get('start_minute', 120))
+        duration = int(request.get('duration_minutes', 120))
+    if start < 0 or start > 1439:
+        raise ValueError('maintenance start is outside the supported range')
+    if duration < 1 or duration > 1440:
+        raise ValueError('maintenance duration is outside the supported range')
+    return start, duration
+
+
 def device_connection_error(exc):
     if isinstance(exc, http.client.RemoteDisconnected):
         return (
@@ -47,10 +74,18 @@ class DeviceClient:
             data=body, method=method,
             headers={'Content-Type': 'application/json', 'Accept': 'application/json'},
         )
-        with urllib.request.urlopen(
-            request, context=self._context(), timeout=self.timeout
-        ) as response:
-            return json.loads(response.read())
+        try:
+            with urllib.request.urlopen(
+                request, context=self._context(), timeout=self.timeout
+            ) as response:
+                return json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            try:
+                value = json.loads(exc.read())
+                detail = value.get('error') if isinstance(value, dict) else value
+            except Exception:
+                detail = str(exc)
+            raise ValueError(bounded_text(detail, 256)) from None
 
 
 class FleetController:
@@ -88,6 +123,7 @@ class FleetController:
 
     def apply_policy(self, request):
         now = self.now()
+        start_minute, duration_minutes = maintenance_window(request)
         target = bounded_text(request.get('device_id'), 64)
         record = self.store.get_device(target, public=False)
         if not record:
@@ -107,12 +143,17 @@ class FleetController:
             raise ValueError(
                 'device identity is unavailable; complete a successful poll first'
             )
-        command = request.get('command') or None
-        commands = [] if not command else [{
+        requested_commands = request.get('commands')
+        if requested_commands is None:
+            command = request.get('command') or None
+            requested_commands = [] if not command else [command]
+        if not isinstance(requested_commands, list) or len(requested_commands) > 16:
+            raise ValueError('deployment commands are invalid')
+        commands = [{
             'id': bounded_text(command.get('id') or os.urandom(8).hex(), 64),
             'action': command.get('action', 'check-update'),
             'release_sequence': int(command.get('release_sequence', 0)),
-        }]
+        } for command in requested_commands]
         policy = {
             'format_version': 1,
             'target_board': 'esp32-s3',
@@ -122,8 +163,8 @@ class FleetController:
             'target_device': device_target, 'target_cohort': '',
             'maintenance': {
                 'weekdays': request.get('weekdays', [0, 1, 2, 3, 4, 5, 6]),
-                'start_minute': int(request.get('start_minute', 120)),
-                'duration_minutes': int(request.get('duration_minutes', 120)),
+                'start_minute': start_minute,
+                'duration_minutes': duration_minutes,
             },
             'updates': {
                 'channel': request.get('channel', 'alpha'),

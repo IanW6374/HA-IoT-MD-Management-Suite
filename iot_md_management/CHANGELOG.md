@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.2.11
+
+- Replace the separate Policy and Rollouts navigation with one plain-language
+  Deployments workflow for choosing a verified release, target device, staging
+  behavior and installation window. Keep cohort deployment as an advanced,
+  optional control. Remove the obsolete Policy and Rollouts portal routes.
+- Replace maintenance minutes-after-midnight and duration inputs with local
+  start and end time controls, including overnight and all-day windows.
+- Preserve the compact signed policy representation by converting the selected
+  times to `start_minute` and `duration_minutes` in the controller.
+- Present Device API JSON errors directly instead of nesting escaped JSON in a
+  second error object.
+
 ## 2.2.10
 
 - Target signed policies with the immutable Device API `device_id` discovered
