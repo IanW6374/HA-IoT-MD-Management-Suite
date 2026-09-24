@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.11', addon)
+        self.assertIn('version: 2.2.12', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
@@ -195,6 +195,23 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('data-page-section="settings"', settings)
         self.assertNotIn('__GITHUB_REPOSITORY__', settings)
         self.assertIn('IanW6374/IoT-Modular-Device', settings)
+
+    def test_portal_navigation_does_not_depend_on_javascript_for_section_visibility(self):
+        self.assertIn('[data-page-section]{display:none}', self.module.HTML)
+        for page in ('overview', 'releases', 'devices', 'deployments', 'settings'):
+            self.assertIn(
+                f'body[data-page="{page}"] [data-page-section="{page}"]',
+                self.module.HTML,
+            )
+        deployments = self.module.render_portal('deployments').decode()
+        self.assertIn(
+            "ready.\\n'+JSON.stringify(rollout,null,2)",
+            deployments,
+        )
+        self.assertNotIn(
+            "ready.\n'+JSON.stringify(rollout,null,2)",
+            deployments,
+        )
 
     def test_github_synchronization_is_explicitly_enabled(self):
         self.assertFalse(self.module.RELEASE_SYNC_STATE['enabled'])

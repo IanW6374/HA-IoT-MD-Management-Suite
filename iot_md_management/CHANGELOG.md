@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.12
+
+- Restore the top-level portal navigation after a malformed deployment status
+  message prevented client-side page initialization.
+- Make route section visibility CSS-driven so a client-side script failure can
+  no longer expose every portal section as one continuous page.
+
 ## 2.2.11
 
 - Replace the separate Policy and Rollouts navigation with one plain-language
