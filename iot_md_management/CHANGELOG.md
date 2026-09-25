@@ -135,3 +135,11 @@
 - Serve signed release artifacts through the dedicated TLS endpoint.
 - Store releases beneath `/share/iot-md-releases` and application state in the
   Home Assistant-managed data directory.
+# 2.2.14
+
+- Replace raw deployment and profile JSON responses with concise inline status
+  summaries that preserve the current page and selected workflow context.
+- Make release deployment controls status-aware while matching commands remain
+  queued on the selected device, with consistent busy, success and error states.
+- Align primary, secondary, destructive and disabled controls with the IoT-MD
+  portal interaction model.

@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.13', addon)
+        self.assertIn('version: 2.2.14', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
@@ -179,6 +179,12 @@ class FleetAddonTests(unittest.TestCase):
         self.assertLess(policy.index('>Device<'), policy.index('>Release<'))
         self.assertIn('id="rollout-cohorts"', self.module.HTML)
         self.assertNotIn('name="cohorts" value="canary,main"', self.module.HTML)
+        self.assertIn('id="deployment-status" class="portal-status"', self.module.HTML)
+        self.assertIn("button.textContent=matching.length?'Deployment queued':'Deploy release'", self.module.HTML)
+        self.assertIn("+' queued for '+", self.module.HTML)
+        self.assertIn('rememberDeploymentSelection', self.module.HTML)
+        self.assertIn('MutationObserver(restoreDeploymentSelection)', self.module.HTML)
+        self.assertNotIn('<pre id="result">', self.module.HTML)
 
     def test_devices_are_editable_and_profiles_are_first_class(self):
         self.assertIn('Edit device', self.module.HTML)
@@ -218,14 +224,9 @@ class FleetAddonTests(unittest.TestCase):
                 self.module.HTML,
             )
         deployments = self.module.render_portal('deployments').decode()
-        self.assertIn(
-            "ready.\\n'+JSON.stringify(rollout,null,2)",
-            deployments,
-        )
-        self.assertNotIn(
-            "ready.\n'+JSON.stringify(rollout,null,2)",
-            deployments,
-        )
+        self.assertIn('Controlled deployment ', deployments)
+        self.assertIn('is ready. Dispatch the active cohort when ready.', deployments)
+        self.assertIn('id="rollout-status" class="portal-status"', deployments)
 
     def test_github_synchronization_is_explicitly_enabled(self):
         self.assertFalse(self.module.RELEASE_SYNC_STATE['enabled'])
