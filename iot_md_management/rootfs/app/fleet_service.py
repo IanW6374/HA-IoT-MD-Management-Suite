@@ -163,9 +163,14 @@ class FleetController:
             'id': bounded_text(command.get('id') or os.urandom(8).hex(), 64),
             'action': command.get('action', 'check-update'),
             'release_sequence': int(command.get('release_sequence', 0)),
+            'release_type': str(command.get('release_type', '') or ''),
         } for command in requested_commands]
+        if any(command['release_type'] not in (
+                '', 'application', 'firmware', 'universal')
+               for command in commands):
+            raise ValueError('deployment update type is invalid')
         policy = {
-            'format_version': 1,
+            'format_version': 2,
             'target_board': 'esp32-s3',
             'policy_sequence': self.store.next_policy_sequence(),
             'issued_at': now - 5, 'not_before': now - 5,
@@ -216,10 +221,14 @@ class FleetController:
                     'device_id': device_id, 'channel': rollout['channel'],
                     'automatic_download': True, 'automatic_activation': True,
                     'maximum_failures': rollout['maximum_failures'],
-                    'command': {
-                        'action': 'download-update',
-                        'release_sequence': rollout['release_sequence'],
-                    },
+                    'commands': [
+                        {
+                            'action': action,
+                            'release_sequence': rollout['release_sequence'],
+                            'release_type': rollout.get('release_type', ''),
+                        }
+                        for action in ('check-update', 'download-update')
+                    ],
                 })
             except Exception as exc:
                 results[device_id] = {'error': bounded_text(exc)}

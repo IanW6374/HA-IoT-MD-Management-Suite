@@ -41,6 +41,8 @@ def policy_message(policy):
             str(command.get('id', '')), str(command.get('action', '')),
             str(command.get('release_sequence', '')),
         ))
+        if int(policy.get('format_version', 1)) >= 2:
+            fields.append(str(command.get('release_type', '')))
     return ('\n'.join(fields) + '\n').encode()
 
 

@@ -83,6 +83,7 @@ class FleetRepository:
                 CREATE TABLE IF NOT EXISTS rollouts (
                     id TEXT PRIMARY KEY,
                     release_sequence INTEGER NOT NULL,
+                    release_type TEXT NOT NULL DEFAULT '',
                     channel TEXT NOT NULL,
                     cohorts TEXT NOT NULL,
                     cohort_index INTEGER NOT NULL,
@@ -115,6 +116,15 @@ class FleetRepository:
                     updated_at INTEGER NOT NULL
                 );
             ''')
+            rollout_columns = {
+                row['name'] for row in self.connection.execute(
+                    'PRAGMA table_info(rollouts)'
+                ).fetchall()
+            }
+            if 'release_type' not in rollout_columns:
+                self.connection.execute(
+                    "ALTER TABLE rollouts ADD COLUMN release_type TEXT NOT NULL DEFAULT ''"
+                )
             self.connection.execute(
                 'INSERT OR IGNORE INTO metadata(key,value) VALUES(?,?)',
                 ('schema_version', str(SCHEMA_VERSION))
@@ -359,17 +369,21 @@ class FleetRepository:
         release_sequence = int(request.get('release_sequence', 0))
         if release_sequence <= 0:
             raise ValueError('rollout release sequence must be positive')
+        release_type = str(request.get('release_type', '') or '')
+        if release_type not in ('', 'application', 'firmware', 'universal'):
+            raise ValueError('rollout update type is invalid')
         values = (
-            identifier, release_sequence, str(request.get('channel') or 'alpha')[:16],
+            identifier, release_sequence, release_type,
+            str(request.get('channel') or 'alpha')[:16],
             _json(cohorts), 0, 'active', maximum_failures, 0, 0, '{}', self.now()
         )
         try:
             with self.lock, self.connection:
                 self.connection.execute('''
                     INSERT INTO rollouts(
-                        id,release_sequence,channel,cohorts,cohort_index,status,
+                        id,release_sequence,release_type,channel,cohorts,cohort_index,status,
                         maximum_failures,successes,failures,results,created_at
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
                 ''', values)
         except sqlite3.IntegrityError:
             raise ValueError('rollout id already exists')

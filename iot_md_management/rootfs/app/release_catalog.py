@@ -332,22 +332,23 @@ class ReleaseCatalog:
     def _release_descriptors(self, release, channel):
         descriptors = []
         assets = release.get('assets', {})
-        kinds = (
-            ('universal', 'application', 'firmware')
-            if assets.get('universal') else ('application', 'firmware')
+        kinds = tuple(
+            kind for kind in ('universal', 'application', 'firmware')
+            if assets.get(kind)
         )
+        if not kinds:
+            raise ValueError('release has no verified update bundle')
         manifests = {
             kind: self.verifier.verify(
                 self.release_root / 'bundles' / assets[kind]['name']
             )['manifest'] for kind in kinds
         }
         for kind in kinds:
-            asset = assets.get(kind)
-            if not asset:
-                raise ValueError('release has no verified ' + kind + ' bundle')
+            asset = assets[kind]
             manifest = manifests[kind]
             compatibility = (
-                manifests['application'] if kind == 'universal' else manifest
+                manifests.get('application', manifest)
+                if kind == 'universal' else manifest
             )
             descriptor = {
                 'format_version': 3, 'target_board': TARGET_BOARD,
@@ -485,10 +486,8 @@ class ReleaseCatalog:
             name: asset for name, asset in assets.items()
             if name.endswith(('.iotapp', '.iotcore', '.iotuni'))
         }
-        if not any(name.endswith('.iotapp') for name in bundle_assets) or not any(
-            name.endswith('.iotcore') for name in bundle_assets
-        ):
-            raise ValueError(tag + ' does not contain application and core bundles')
+        if not bundle_assets:
+            raise ValueError(tag + ' does not contain a supported update bundle')
         provenance_name = next((name for name in assets if name.startswith('provenance-')), '')
         sbom_name = next((name for name in assets if name.startswith('sbom-')), '')
         if not provenance_name or not sbom_name:

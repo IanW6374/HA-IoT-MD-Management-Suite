@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.14', addon)
+        self.assertIn('version: 2.2.15', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
@@ -143,8 +143,14 @@ class FleetAddonTests(unittest.TestCase):
                 'device_id': 'IoT-MD-002',
                 'start_time': '23:00', 'end_time': '01:30',
                 'commands': [
-                    {'action': 'check-update', 'release_sequence': 2765},
-                    {'action': 'download-update', 'release_sequence': 2765},
+                    {
+                        'action': 'check-update', 'release_sequence': 2765,
+                        'release_type': 'universal',
+                    },
+                    {
+                        'action': 'download-update', 'release_sequence': 2765,
+                        'release_type': 'universal',
+                    },
                 ],
             })
 
@@ -157,6 +163,8 @@ class FleetAddonTests(unittest.TestCase):
             ['check-update', 'download-update'],
         )
         self.assertEqual(signer.signed['commands'][0]['release_sequence'], 2765)
+        self.assertEqual(signer.signed['format_version'], 2)
+        self.assertEqual(signer.signed['commands'][0]['release_type'], 'universal')
         client.request.assert_called_once()
 
     def test_policy_form_uses_local_start_and_end_times(self):
@@ -168,7 +176,7 @@ class FleetAddonTests(unittest.TestCase):
 
     def test_deployment_workflow_hides_policy_implementation_details(self):
         self.assertIn('data-page-link="deployments"', self.module.HTML)
-        self.assertIn('Deploy a verified release', self.module.HTML)
+        self.assertIn('Deploy a verified update', self.module.HTML)
         self.assertIn('Stage for later installation', self.module.HTML)
         self.assertIn('Stage and install in the maintenance window', self.module.HTML)
         self.assertIn('Advanced cohort deployment', self.module.HTML)
@@ -176,11 +184,14 @@ class FleetAddonTests(unittest.TestCase):
         self.assertNotIn('data-page-link="rollouts"', self.module.HTML)
         self.assertIn("actions=['check-update','download-update']", self.module.HTML)
         policy = self.module.HTML.split('<form id="policy">', 1)[1].split('</form>', 1)[0]
-        self.assertLess(policy.index('>Device<'), policy.index('>Release<'))
+        self.assertLess(policy.index('>Device<'), policy.index('>Update file<'))
         self.assertIn('id="rollout-cohorts"', self.module.HTML)
         self.assertNotIn('name="cohorts" value="canary,main"', self.module.HTML)
         self.assertIn('id="deployment-status" class="portal-status"', self.module.HTML)
-        self.assertIn("button.textContent=matching.length?'Deployment queued':'Deploy release'", self.module.HTML)
+        self.assertIn("button.textContent=matching.length?'Update queued':'Deploy update'", self.module.HTML)
+        self.assertIn("['universal','application','firmware']", self.module.HTML)
+        self.assertIn('release_type:releaseType', self.module.HTML)
+        self.assertIn('release_type:release.dataset.releaseType', self.module.HTML)
         self.assertIn("+' queued for '+", self.module.HTML)
         self.assertIn('rememberDeploymentSelection', self.module.HTML)
         self.assertIn('MutationObserver(restoreDeploymentSelection)', self.module.HTML)
@@ -276,6 +287,11 @@ class FleetAddonTests(unittest.TestCase):
     def test_release_import_accepts_standard_intoto_jsonl_provenance(self):
         from release_catalog import ASSET_SUFFIXES
         self.assertIn('.jsonl', ASSET_SUFFIXES)
+        source = Path(
+            self.module.__file__
+        ).with_name('release_catalog.py').read_text()
+        self.assertIn('does not contain a supported update bundle', source)
+        self.assertNotIn('does not contain application and core bundles', source)
 
     def test_incompatible_sqlite_schema_requires_clean_seed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -536,6 +552,21 @@ class FleetAddonTests(unittest.TestCase):
         self.assertFalse((root / 'site/alpha/latest.json').exists())
         self.assertEqual(catalog.state['releases'][0]['channels'], [])
 
+        application_only = json.loads(json.dumps(catalog.state['releases'][0]))
+        application_only['assets'] = {
+            'application': application_only['assets']['application'],
+        }
+        application_only['channels'] = ['alpha']
+        catalog.state['releases'] = [application_only]
+        catalog._write_channel('alpha')
+        application_catalog = json.loads(
+            (root / 'site/alpha/latest.json').read_text()
+        )
+        self.assertEqual(
+            [item['type'] for item in application_catalog['releases']],
+            ['application'],
+        )
+
     def test_registered_device_response_hides_certificate_paths(self):
         store = self.module.FleetStore(Path(self.temp.name) / 'state.json')
         self.addCleanup(store.close)
@@ -581,8 +612,22 @@ class FleetAddonTests(unittest.TestCase):
             })
         rollout = store.create_rollout({
             'release_sequence': 2101, 'cohorts': ['canary', 'main'],
-            'maximum_failures': 1,
+            'maximum_failures': 1, 'release_type': 'application',
         })
+        self.assertEqual(rollout['release_type'], 'application')
+        from fleet_service import FleetController
+        controller = FleetController(store, None)
+        controller.apply_policy = mock.Mock(return_value={'accepted': True})
+        controller.dispatch_rollout(rollout['id'])
+        dispatched = controller.apply_policy.call_args.args[0]
+        self.assertEqual(
+            [command['action'] for command in dispatched['commands']],
+            ['check-update', 'download-update'],
+        )
+        self.assertEqual(
+            {command['release_type'] for command in dispatched['commands']},
+            {'application'},
+        )
         store.record_rollout_result(rollout['id'], 'canary-1', 'complete')
         advanced = store.advance_rollout(rollout['id'])
         self.assertEqual(advanced['cohort_index'], 1)

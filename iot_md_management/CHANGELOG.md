@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.2.15
+
+- Let direct and controlled deployments select a verified Application, Core or
+  Universal update file instead of treating every artifact with the same
+  release sequence as interchangeable.
+- Import and promote releases containing any supported update bundle; an
+  application-only or core-only GitHub release no longer requires a matching
+  companion artifact.
+- Sign fleet policy format 2 commands with the selected update type and make
+  controlled deployments check that exact artifact before downloading it.
+- Rename deployment-facing release actions to Updates and show the selected
+  artifact type in deployment choices, queued-command status and rollout cards.
+
+## 2.2.14
+
+- Replace raw deployment and profile JSON responses with concise inline status
+  summaries that preserve the current page and selected workflow context.
+- Make release deployment controls status-aware while matching commands remain
+  queued on the selected device, with consistent busy, success and error states.
+- Align primary, secondary, destructive and disabled controls with the IoT-MD
+  portal interaction model.
+
 ## 2.2.13
 
 - Allow registered devices to be edited in place, including cohort, name,
@@ -135,11 +157,3 @@
 - Serve signed release artifacts through the dedicated TLS endpoint.
 - Store releases beneath `/share/iot-md-releases` and application state in the
   Home Assistant-managed data directory.
-# 2.2.14
-
-- Replace raw deployment and profile JSON responses with concise inline status
-  summaries that preserve the current page and selected workflow context.
-- Make release deployment controls status-aware while matching commands remain
-  queued on the selected device, with consistent busy, success and error states.
-- Align primary, secondary, destructive and disabled controls with the IoT-MD
-  portal interaction model.
