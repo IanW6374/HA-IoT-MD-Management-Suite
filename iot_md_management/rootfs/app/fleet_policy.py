@@ -1,6 +1,7 @@
 """Fleet policy canonicalization and the independent policy-signing trust domain."""
 
 import json
+import hashlib
 import os
 from pathlib import Path
 
@@ -80,6 +81,9 @@ class PolicySigner:
         temporary.write_bytes(public)
         os.chmod(temporary, 0o644)
         os.replace(temporary, self.public_path)
+
+    def fingerprint(self):
+        return hashlib.sha256(self.public_path.read_bytes()).hexdigest()
 
     def sign(self, policy):
         value = json.loads(json.dumps(policy))

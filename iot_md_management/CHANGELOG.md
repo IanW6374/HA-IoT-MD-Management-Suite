@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.19
+
+- Compare the device-reported active fleet verification-key fingerprint with
+  the Management signing identity before creating a deployment policy.
+- Report both fingerprints when trust differs, instead of sending a policy
+  that the device must reject.
+
 ## 2.2.18
 
 - Allow up to 30 seconds for fleet-policy verification and its HTTP response,

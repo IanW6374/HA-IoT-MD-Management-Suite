@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.18', addon)
+        self.assertIn('version: 2.2.19', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -243,6 +243,32 @@ class FleetAddonTests(unittest.TestCase):
 
             self.assertEqual(public_path.read_bytes(), expected)
             self.assertEqual(len(expected), 64)
+            self.assertEqual(
+                PolicySigner(private_path, public_path).fingerprint(),
+                hashlib.sha256(expected).hexdigest(),
+            )
+
+    def test_policy_refuses_a_reported_management_identity_mismatch(self):
+        from fleet_service import FleetController
+
+        record = {
+            'id': 'device-1', 'enabled': True,
+            'inventory': {
+                'device': {'device_id': 'immutable-device'},
+                'fleet': {'verification_key_fingerprint': 'a' * 64},
+            },
+        }
+
+        class Store:
+            def get_device(self, _identifier, public=False):
+                return record
+
+        signer = mock.Mock()
+        signer.fingerprint.return_value = 'b' * 64
+        controller = FleetController(Store(), signer)
+
+        with self.assertRaisesRegex(ValueError, 'Device trusts ' + 'a' * 64):
+            controller.apply_policy({'device_id': 'device-1'})
 
     def test_portal_sections_have_distinct_routes_and_active_tabs(self):
         self.assertEqual(

@@ -153,6 +153,22 @@ class FleetController:
             raise ValueError(
                 'device identity is unavailable; complete a successful poll first'
             )
+        device_key_fingerprint = str(
+            ((record.get('inventory') or {}).get('fleet') or {}).get(
+                'verification_key_fingerprint', ''
+            )
+        ).lower()
+        signer_fingerprint = getattr(self.signer, 'fingerprint', lambda: '')()
+        if (
+            device_key_fingerprint and signer_fingerprint and
+            device_key_fingerprint != signer_fingerprint
+        ):
+            raise ValueError(
+                'Management signing identity mismatch. Device trusts ' +
+                device_key_fingerprint + '; Management uses ' +
+                signer_fingerprint + '. Replace the device Management Suite '
+                'signing key before deploying.'
+            )
         requested_commands = request.get('commands')
         if requested_commands is None:
             command = request.get('command') or None
