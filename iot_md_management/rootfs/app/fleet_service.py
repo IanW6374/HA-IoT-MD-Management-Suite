@@ -138,6 +138,14 @@ class FleetController:
         record = self.store.get_device(target, public=False)
         if not record:
             raise ValueError('device is not registered')
+        if record.get('enabled'):
+            self.poll_device(target)
+            record = self.store.get_device(target, public=False)
+        if record.get('last_error'):
+            raise ValueError(
+                'Cannot verify the device Management signing identity: ' +
+                bounded_text(record.get('last_error'), 192)
+            )
         device_target = str(
             (record.get('inventory') or {}).get('device', {}).get('device_id') or
             (record.get('fleet') or {}).get('device_id') or ''
@@ -159,6 +167,12 @@ class FleetController:
             )
         ).lower()
         signer_fingerprint = getattr(self.signer, 'fingerprint', lambda: '')()
+        if signer_fingerprint and not device_key_fingerprint:
+            raise ValueError(
+                'The device did not report its active Management signing-key '
+                'fingerprint. Manually update the device to a compatible release, '
+                'refresh it, and retry.'
+            )
         if (
             device_key_fingerprint and signer_fingerprint and
             device_key_fingerprint != signer_fingerprint
@@ -223,7 +237,7 @@ class FleetController:
                     'Device does not trust this Management Suite signing identity. '
                     'Download the current verification key from Settings and replace '
                     'the Management Suite signing key under the device Maintenance / '
-                    'Certificates / Service trust page.'
+                    'Certificates / CA & signing trust page.'
                 ) from None
             raise
         self.poll_device(target)

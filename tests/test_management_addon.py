@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.19', addon)
+        self.assertIn('version: 2.2.20', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -266,9 +266,53 @@ class FleetAddonTests(unittest.TestCase):
         signer = mock.Mock()
         signer.fingerprint.return_value = 'b' * 64
         controller = FleetController(Store(), signer)
+        controller.poll_device = mock.Mock(return_value=record)
 
         with self.assertRaisesRegex(ValueError, 'Device trusts ' + 'a' * 64):
             controller.apply_policy({'device_id': 'device-1'})
+
+    def test_policy_refuses_to_sign_without_a_fresh_device_identity(self):
+        from fleet_service import FleetController
+
+        record = {
+            'id': 'device-1', 'enabled': True,
+            'inventory': {'device': {'device_id': 'immutable-device'}, 'fleet': {}},
+            'last_error': '',
+        }
+
+        class Store:
+            def get_device(self, _identifier, public=False):
+                return record
+
+        signer = mock.Mock()
+        signer.fingerprint.return_value = 'b' * 64
+        controller = FleetController(Store(), signer)
+        controller.poll_device = mock.Mock(return_value=record)
+
+        with self.assertRaisesRegex(ValueError, 'did not report its active'):
+            controller.apply_policy({'device_id': 'device-1'})
+        signer.sign.assert_not_called()
+
+    def test_policy_surfaces_refresh_error_before_signing(self):
+        from fleet_service import FleetController
+
+        record = {
+            'id': 'device-1', 'enabled': True,
+            'inventory': {'device': {'device_id': 'immutable-device'}},
+            'last_error': "'module' object has no attribute 'verification_key_fingerprint'",
+        }
+
+        class Store:
+            def get_device(self, _identifier, public=False):
+                return record
+
+        signer = mock.Mock()
+        controller = FleetController(Store(), signer)
+        controller.poll_device = mock.Mock(return_value=record)
+
+        with self.assertRaisesRegex(ValueError, 'Cannot verify.*verification_key_fingerprint'):
+            controller.apply_policy({'device_id': 'device-1'})
+        signer.sign.assert_not_called()
 
     def test_portal_sections_have_distinct_routes_and_active_tabs(self):
         self.assertEqual(

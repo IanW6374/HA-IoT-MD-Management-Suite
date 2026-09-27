@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.20
+
+- Refresh device inventory immediately before signing a deployment and refuse
+  to submit policy when the device's active Management signing-key fingerprint
+  cannot be read.
+- Surface the inventory polling error or both mismatched fingerprints and use
+  the current **CA & signing trust** portal location in remediation guidance.
+
 ## 2.2.19
 
 - Compare the device-reported active fleet verification-key fingerprint with
