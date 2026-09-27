@@ -197,9 +197,19 @@ class FleetController:
             'commands': commands,
         }
         signed = self.signer.sign(policy)
-        result = self._client(record).request(
-            '/api/v2/fleet/policy', 'POST', signed
-        )
+        try:
+            result = self._client(record).request(
+                '/api/v2/fleet/policy', 'POST', signed
+            )
+        except ValueError as exc:
+            if 'fleet policy signature verification failed' in str(exc):
+                raise ValueError(
+                    'Device does not trust this Management Suite signing identity. '
+                    'Download the current verification key from Settings and replace '
+                    'the Management Suite signing key under the device Maintenance / '
+                    'Certificates / Service trust page.'
+                ) from None
+            raise
         self.poll_device(target)
         return result
 

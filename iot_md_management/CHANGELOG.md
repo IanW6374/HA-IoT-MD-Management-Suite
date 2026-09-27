@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.17
+
+- Re-derive the downloadable Management Suite verification key from the
+  persisted private signing identity on every start, repairing a missing or
+  stale public-key file without rotating the identity.
+- Replace the raw fleet-policy signature error with instructions for explicitly
+  re-enrolling the current Management Suite signing key on the target device.
+
 ## 2.2.16
 
 - Add a **Stage and install now** deployment action that signs an all-day

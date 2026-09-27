@@ -54,23 +54,32 @@ class PolicySigner:
 
     def _load_or_create(self):
         if self.private_path.exists():
-            return serialization.load_pem_private_key(
+            private = serialization.load_pem_private_key(
                 self.private_path.read_bytes(), password=None
             )
-        self.private_path.parent.mkdir(parents=True, exist_ok=True)
-        private = ec.generate_private_key(ec.SECP256R1())
-        self.private_path.write_bytes(private.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        ))
-        os.chmod(self.private_path, 0o600)
+        else:
+            self.private_path.parent.mkdir(parents=True, exist_ok=True)
+            private = ec.generate_private_key(ec.SECP256R1())
+            self.private_path.write_bytes(private.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            ))
+            os.chmod(self.private_path, 0o600)
+        self._write_public_key(private)
+        return private
+
+    def _write_public_key(self, private):
         numbers = private.public_key().public_numbers()
-        self.public_path.write_bytes(
+        public = (
             numbers.x.to_bytes(32, 'big') + numbers.y.to_bytes(32, 'big')
         )
-        os.chmod(self.public_path, 0o644)
-        return private
+        if self.public_path.exists() and self.public_path.read_bytes() == public:
+            return
+        temporary = self.public_path.with_suffix(self.public_path.suffix + '.tmp')
+        temporary.write_bytes(public)
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, self.public_path)
 
     def sign(self, policy):
         value = json.loads(json.dumps(policy))

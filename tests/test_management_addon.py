@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.16', addon)
+        self.assertIn('version: 2.2.17', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
@@ -222,6 +222,21 @@ class FleetAddonTests(unittest.TestCase):
             maintenance_window({'start_time': '00:00', 'end_time': '00:00'}),
             (0, 1440),
         )
+
+    def test_policy_signer_repairs_public_key_from_persisted_identity(self):
+        from fleet_policy import PolicySigner
+
+        with tempfile.TemporaryDirectory() as directory:
+            private_path = Path(directory) / 'fleet-signing-key.pem'
+            public_path = Path(directory) / 'fleet-verification-key.bin'
+            PolicySigner(private_path, public_path)
+            expected = public_path.read_bytes()
+            public_path.write_bytes(b'outdated')
+
+            PolicySigner(private_path, public_path)
+
+            self.assertEqual(public_path.read_bytes(), expected)
+            self.assertEqual(len(expected), 64)
 
     def test_portal_sections_have_distinct_routes_and_active_tabs(self):
         self.assertEqual(
