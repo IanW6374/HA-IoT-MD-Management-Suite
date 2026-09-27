@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.16
+
+- Add a **Stage and install now** deployment action that signs an all-day
+  maintenance window and queues check, download and activation commands
+  immediately.
+- Show maintenance start and end controls only for explicitly scheduled
+  installations.
+
 ## 2.2.15
 
 - Let direct and controlled deployments select a verified Application, Core or
