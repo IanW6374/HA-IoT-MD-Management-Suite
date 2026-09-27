@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.21
+
+- Distinguish a matching signing identity with an incompatible frozen device
+  policy canonicalizer from a genuine key mismatch.
+- Direct affected development devices to a universal/core update supporting
+  typed format-2 fleet commands instead of repeatedly re-enrolling the key.
+
 ## 2.2.20
 
 - Refresh device inventory immediately before signing a deployment and refuse

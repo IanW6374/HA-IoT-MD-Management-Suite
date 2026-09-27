@@ -234,10 +234,10 @@ class FleetController:
         except ValueError as exc:
             if 'fleet policy signature verification failed' in str(exc):
                 raise ValueError(
-                    'Device does not trust this Management Suite signing identity. '
-                    'Download the current verification key from Settings and replace '
-                    'the Management Suite signing key under the device Maintenance / '
-                    'Certificates / CA & signing trust page.'
+                    'The device reports the expected Management signing identity but '
+                    'its core rejected the format-2 fleet policy signature. Install a '
+                    'current universal/core update that supports typed fleet commands, '
+                    'then refresh the device and retry.'
                 ) from None
             raise
         self.poll_device(target)

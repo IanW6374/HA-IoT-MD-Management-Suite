@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.20', addon)
+        self.assertIn('version: 2.2.21', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -313,6 +313,39 @@ class FleetAddonTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Cannot verify.*verification_key_fingerprint'):
             controller.apply_policy({'device_id': 'device-1'})
         signer.sign.assert_not_called()
+
+    def test_matching_identity_signature_failure_requires_core_update(self):
+        from fleet_service import FleetController
+
+        fingerprint = 'b' * 64
+        record = {
+            'id': 'device-1', 'enabled': True, 'last_error': '',
+            'inventory': {
+                'device': {'device_id': 'immutable-device'},
+                'fleet': {'verification_key_fingerprint': fingerprint},
+            },
+        }
+
+        class Store:
+            def get_device(self, _identifier, public=False):
+                return record
+
+            def next_policy_sequence(self):
+                return 1
+
+        signer = mock.Mock()
+        signer.fingerprint.return_value = fingerprint
+        signer.sign.side_effect = lambda policy: dict(policy, signature='signed')
+        controller = FleetController(Store(), signer, now=lambda: 2000000000)
+        controller.poll_device = mock.Mock(return_value=record)
+        client = mock.Mock()
+        client.request.side_effect = ValueError(
+            'fleet policy signature verification failed'
+        )
+        controller._client = mock.Mock(return_value=client)
+
+        with self.assertRaisesRegex(ValueError, 'universal/core update'):
+            controller.apply_policy({'device_id': 'device-1'})
 
     def test_portal_sections_have_distinct_routes_and_active_tabs(self):
         self.assertEqual(
