@@ -96,10 +96,10 @@ class FleetController:
         self.now = now or (lambda: int(time.time()))
         self.tls = dict(tls or {})
 
-    def _client(self, record):
+    def _client(self, record, timeout=None):
         settings = dict(record)
         settings.update(self.tls)
-        return DeviceClient(settings, self.timeout)
+        return DeviceClient(settings, self.timeout if timeout is None else timeout)
 
     def poll_device(self, identifier):
         record = self.store.get_device(identifier, public=False)
@@ -198,7 +198,7 @@ class FleetController:
         }
         signed = self.signer.sign(policy)
         try:
-            result = self._client(record).request(
+            result = self._client(record, max(30, self.timeout)).request(
                 '/api/v2/fleet/policy', 'POST', signed
             )
         except ValueError as exc:

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.18
+
+- Allow up to 30 seconds for fleet-policy verification and its HTTP response,
+  avoiding a generic read timeout while constrained devices complete ECDSA
+  verification and report an actionable trust error.
+- Display the SHA-256 fingerprint of the active Management Suite verification
+  key on Settings so administrators can confirm which identity is enrolled.
+
 ## 2.2.17
 
 - Re-derive the downloadable Management Suite verification key from the

@@ -28,7 +28,8 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.17', addon)
+        self.assertIn('version: 2.2.18', addon)
+        self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
@@ -54,6 +55,10 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('setReleaseChannel(this)', self.module.HTML)
         self.assertNotIn('Promote stable', self.module.HTML)
         self.assertNotIn('Promote beta', self.module.HTML)
+        settings = self.module.render_portal('settings').decode()
+        expected = hashlib.sha256(self.module.PUBLIC_KEY_PATH.read_bytes()).hexdigest()
+        self.assertIn(expected, settings)
+        self.assertNotIn('__FLEET_KEY_FINGERPRINT__', settings)
 
     def test_device_enrollment_has_guidance_and_management_actions(self):
         self.assertIn('placeholder="IoT-MD-002"', self.module.HTML)
@@ -138,7 +143,7 @@ class FleetAddonTests(unittest.TestCase):
         client = mock.Mock()
         client.request.return_value = {'accepted': True}
 
-        with mock.patch('fleet_service.DeviceClient', return_value=client):
+        with mock.patch('fleet_service.DeviceClient', return_value=client) as device_client:
             controller.apply_policy({
                 'device_id': 'IoT-MD-002',
                 'start_time': '23:00', 'end_time': '01:30',
@@ -154,6 +159,7 @@ class FleetAddonTests(unittest.TestCase):
                 ],
             })
 
+        self.assertEqual(device_client.call_args.args[1], 30)
         self.assertEqual(signer.signed['target_device'], '3cdc755be290')
         self.assertNotEqual(signer.signed['target_device'], 'IoT-MD-002')
         self.assertEqual(signer.signed['maintenance']['start_minute'], 1380)

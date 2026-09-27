@@ -1,5 +1,5 @@
 name: IoT MD Management Suite
-version: 2.2.17
+version: 2.2.18
 slug: iot_md_management
 description: Fleet, policy, staged rollout and secure release management for IoT MD devices
 url: https://github.com/IanW6374/HA-IoT-MD-Management-Suite
@@ -31,7 +31,7 @@ options:
   certfile: fullchain.pem
   keyfile: privkey.pem
   poll_interval_s: 60
-  request_timeout_s: 10
+  request_timeout_s: 30
   device_api_ca_path: /ssl/iot-md-ca.pem
   device_api_client_cert_path: /ssl/iot-md-fleet.pem
   device_api_client_key_path: /ssl/iot-md-fleet-key.pem
