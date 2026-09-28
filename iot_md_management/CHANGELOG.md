@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.23
+
+- Stop displaying an update as installing when the device has returned online
+  after activation but still reports its previous release sequence.
+- Present that terminal rollback/startup outcome as a retryable deployment
+  failure.
+
 ## 2.2.22
 
 - Keep the deployment action status-aware through checking, staging,

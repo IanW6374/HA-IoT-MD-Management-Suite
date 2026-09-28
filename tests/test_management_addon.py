@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.22', addon)
+        self.assertIn('version: 2.2.23', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -205,6 +205,7 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('function deploymentState(', self.module.HTML)
         self.assertIn("label:'Installing update'", self.module.HTML)
         self.assertIn("label:'Retry update'", self.module.HTML)
+        self.assertIn('returnedAt>completedAt+30', self.module.HTML)
         self.assertIn('function updateInstalled(', self.module.HTML)
         self.assertIn("['universal','application','firmware']", self.module.HTML)
         self.assertIn('release_type:releaseType', self.module.HTML)
