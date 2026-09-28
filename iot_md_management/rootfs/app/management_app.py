@@ -366,13 +366,18 @@ class Handler(BaseHTTPRequestHandler):
 def poll_loop():
     interval = max(10, int(OPTIONS.get('poll_interval_s', 60)))
     while True:
+        active = any(
+            item.get('status') in ('queued', 'active')
+            for item in STORE.list_deployments()
+        )
+        cadence = 10 if active else interval
         for identifier in STORE.device_ids(enabled_only=True):
             STORE.enqueue_job(
                 'poll', identifier, idempotency_key=(
-                    'poll:' + identifier + ':' + str(int(time.time()) // interval)
+                    'poll:' + identifier + ':' + str(int(time.time()) // cadence)
                 )
             )
-        time.sleep(interval)
+        time.sleep(cadence)
 
 
 def job_loop():

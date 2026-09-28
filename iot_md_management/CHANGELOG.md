@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.3
+
+- Remove duplicate status, version and internal identifier details from deployment history.
+- Keep one concise outcome line for a single device and expandable per-device results for groups.
+- Poll active deployments more frequently and move completed work into history without a page refresh.
+
 ## 2.3.2
 
 - Retain graphical milestone progress for deployments that are still in flight.

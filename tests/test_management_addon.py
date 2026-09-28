@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.3.2', addon)
+        self.assertIn('version: 2.3.3', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -218,6 +218,11 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('class="timeline"', self.module.HTML)
         self.assertIn('deployment.targets.length>1', self.module.HTML)
         self.assertIn('device results</summary>', self.module.HTML)
+        self.assertIn('function conciseDeploymentDetail(detail,version)', self.module.HTML)
+        self.assertIn('function refreshDeploymentProgress()', self.module.HTML)
+        self.assertIn("if(activePage==='deploy')refreshDeploymentProgress()", self.module.HTML)
+        self.assertNotIn('<p>${esc(deployment.id)}', self.module.HTML)
+        self.assertNotIn('${statusBadge(firstResult.status)}', self.module.HTML)
 
     def test_release_grid_is_fixed_and_profiles_are_grouped(self):
         self.assertIn(
