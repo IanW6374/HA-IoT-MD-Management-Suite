@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.3.1', addon)
+        self.assertIn('version: 2.3.2', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -192,6 +192,7 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('All enabled', self.module.HTML)
         self.assertIn('An update, a configuration profile, or both', self.module.HTML)
         self.assertIn('class="flow" aria-label="Deployment workflow"', self.module.HTML)
+        self.assertIn('id="deployment-active"', self.module.HTML)
         self.assertIn('Deployment history', self.module.HTML)
         self.assertNotIn('data-page-link="policy"', self.module.HTML)
         self.assertNotIn('data-page-link="rollouts"', self.module.HTML)
@@ -201,12 +202,22 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('<a class="metric" href="devices">', self.module.HTML)
         self.assertIn('<a class="metric" href="releases">', self.module.HTML)
         self.assertIn(
-            '<a class="metric" href="deploy#deployment-history">',
+            '<a class="metric" href="deploy#active-deployments">',
             self.module.HTML,
         )
         self.assertIn('<a class="metric" href="activity">', self.module.HTML)
         self.assertNotIn('id="overview-deployments"', self.module.HTML)
         self.assertNotIn('id="overview-activity"', self.module.HTML)
+
+    def test_deployment_history_keeps_progress_only_for_in_flight_work(self):
+        self.assertIn('function activeDeploymentCard(deployment)', self.module.HTML)
+        self.assertIn('${flowFor(deployment)}${deviceResults}', self.module.HTML)
+        self.assertIn("const terminal=new Set(['complete','failed','partial','staged'])", self.module.HTML)
+        self.assertIn('active.map(activeDeploymentCard)', self.module.HTML)
+        self.assertIn('history.map(deploymentHistoryItem)', self.module.HTML)
+        self.assertIn('class="timeline"', self.module.HTML)
+        self.assertIn('deployment.targets.length>1', self.module.HTML)
+        self.assertIn('device results</summary>', self.module.HTML)
 
     def test_release_grid_is_fixed_and_profiles_are_grouped(self):
         self.assertIn(

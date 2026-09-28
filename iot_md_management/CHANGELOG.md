@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.2
+
+- Retain graphical milestone progress for deployments that are still in flight.
+- Present finished deployment history using the same compact chronological timeline as Activity.
+- Show single-device results inline and place multi-device results in one expandable section.
+
 ## 2.3.1
 
 - Reduce Overview to four linked fleet summaries and remove the duplicated
