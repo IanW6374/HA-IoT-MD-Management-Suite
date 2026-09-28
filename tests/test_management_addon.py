@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.3.0', addon)
+        self.assertIn('version: 2.3.1', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -196,6 +196,29 @@ class FleetAddonTests(unittest.TestCase):
         self.assertNotIn('data-page-link="policy"', self.module.HTML)
         self.assertNotIn('data-page-link="rollouts"', self.module.HTML)
         self.assertIn("api('api/deployments'", self.module.HTML)
+
+    def test_overview_links_summary_without_duplicate_activity_panels(self):
+        self.assertIn('<a class="metric" href="devices">', self.module.HTML)
+        self.assertIn('<a class="metric" href="releases">', self.module.HTML)
+        self.assertIn(
+            '<a class="metric" href="deploy#deployment-history">',
+            self.module.HTML,
+        )
+        self.assertIn('<a class="metric" href="activity">', self.module.HTML)
+        self.assertNotIn('id="overview-deployments"', self.module.HTML)
+        self.assertNotIn('id="overview-activity"', self.module.HTML)
+
+    def test_release_grid_is_fixed_and_profiles_are_grouped(self):
+        self.assertIn(
+            '.release-grid{grid-template-columns:repeat(4,minmax(0,1fr))}',
+            self.module.HTML,
+        )
+        self.assertIn('class="release-fingerprint"', self.module.HTML)
+        for group in (
+            'Profile details', 'Time and logging', 'Home Assistant', 'MQTT',
+            'Remote syslog',
+        ):
+            self.assertIn('<legend>' + group + '</legend>', self.module.HTML)
         self.assertIn('target_scope:scope,targets,cohorts,update,profile_name:profile,activation', self.module.HTML)
         self.assertNotIn('<pre id="result">', self.module.HTML)
 

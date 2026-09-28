@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.3.1
+
+- Reduce Overview to four linked fleet summaries and remove the duplicated
+  deployment and activity sections.
+- Keep release cards at a consistent four-column width, with responsive
+  breakpoints for smaller screens, and abbreviate long source revisions while
+  retaining the complete value as hover text.
+- Organize profile settings into Profile details, Time and logging, Home
+  Assistant, MQTT and Remote syslog groups.
+
 ## 2.3.0
 
 - Replace the test-oriented portal with a consistent graphical fleet
