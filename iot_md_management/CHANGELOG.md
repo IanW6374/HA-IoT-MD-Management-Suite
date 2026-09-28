@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.2.22
+
+- Keep the deployment action status-aware through checking, staging,
+  installation, device restart and confirmed inventory refresh.
+- Present a concise version/device summary instead of exposing the number of
+  queued fleet commands.
+- Offer a clear retry action when the device stops an ordered deployment after
+  a failed prerequisite.
+
 ## 2.2.21
 
 - Distinguish a matching signing identity with an incompatible frozen device
