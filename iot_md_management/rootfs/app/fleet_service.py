@@ -1,6 +1,7 @@
 """Fleet polling, policy application, and rollout use cases."""
 
 import http.client
+import base64
 import json
 import os
 import ssl
@@ -67,12 +68,15 @@ class DeviceClient:
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         return context
 
-    def request(self, path, method='GET', payload=None):
-        body = None if payload is None else json.dumps(payload).encode()
+    def request(self, path, method='GET', payload=None, content_type='application/json'):
+        body = None if payload is None else (
+            bytes(payload) if isinstance(payload, (bytes, bytearray))
+            else json.dumps(payload).encode()
+        )
         request = urllib.request.Request(
             'https://' + self.record['host'] + ':' + str(self.record['port']) + path,
             data=body, method=method,
-            headers={'Content-Type': 'application/json', 'Accept': 'application/json'},
+            headers={'Content-Type': content_type, 'Accept': 'application/json'},
         )
         try:
             with urllib.request.urlopen(
@@ -112,6 +116,14 @@ class FleetController:
         try:
             inventory = client.request('/api/v2/device/inventory')
             configuration = client.request('/api/v2/configuration')
+            if (configuration.get('configuration') or {}).get(
+                'network_trial_confirmation_ready'
+            ):
+                confirmation = client.request(
+                    '/api/v2/configuration/network/confirm', 'POST', {}
+                )
+                if confirmation.get('confirmed'):
+                    configuration['configuration']['network_trial_pending'] = False
             inventory['configuration'] = configuration.get('configuration') or {}
             health = client.request('/api/v2/health')
             events = client.request(
@@ -310,10 +322,33 @@ class FleetController:
                 )
                 if not profile:
                     raise ValueError('configuration profile no longer exists')
+                selected = deployment.get('profile_fields') or []
+                if selected:
+                    available = set(profile.get('settings', ())) | set(
+                        profile.get('secrets', ())
+                    )
+                    unknown = set(selected) - available
+                    if unknown:
+                        raise ValueError(
+                            'selected profile field is unavailable: ' +
+                            sorted(unknown)[0]
+                        )
+                    profile = dict(profile)
+                    profile['settings'] = {
+                        name: value for name, value in profile['settings'].items()
+                        if name in selected
+                    }
+                    profile['secrets'] = {
+                        name: value for name, value in profile['secrets'].items()
+                        if name in selected
+                    }
                 self.apply_profile(identifier, profile)
                 self.store.record_audit(
                     'profile.applied', 'complete', deployment_id, identifier,
-                    {'profile_name': profile['name']}
+                    {
+                        'profile_name': profile['name'],
+                        'profile_fields': selected,
+                    }
                 )
             update = deployment.get('update') or {}
             if not update:
@@ -368,9 +403,44 @@ class FleetController:
         record = self.store.get_device(identifier, public=False)
         if not record:
             raise ValueError('device is not registered')
-        result = self._client(record).request(
-            '/api/v2/configuration/profile', 'POST', profile
-        )
+        client = self._client(record)
+        protected = dict(profile.get('secrets') or {})
+        certificate_kinds = {
+            'certificate_mqtt_ca': 'mqtt-ca',
+            'certificate_release_ca': 'release-ca',
+            'certificate_syslog_ca': 'syslog-ca',
+            'certificate_portal': 'portal-cert',
+            'certificate_portal_key': 'portal-key',
+            'certificate_api_server': 'api-server-cert',
+            'certificate_api_server_key': 'api-server-key',
+            'certificate_api_client_ca': 'api-client-ca',
+            'management_suite_key': 'management-suite-key',
+        }
+        certificate_values = {
+            certificate_kinds[name]: base64.b64decode(protected.pop(name))
+            for name in certificate_kinds if protected.get(name)
+        }
+        device_profile = dict(profile)
+        device_profile['secrets'] = protected
+        if device_profile.get('settings') or protected:
+            result = client.request(
+                '/api/v2/configuration/profile', 'POST', device_profile
+            )
+        else:
+            result = {'accepted': True, 'profile': {'applied_settings': []}}
+        for kind, payload in certificate_values.items():
+            client.request(
+                '/api/v2/configuration/certificates/' + kind, 'POST', payload,
+                'application/octet-stream'
+            )
+        if certificate_values:
+            result['certificates'] = client.request(
+                '/api/v2/configuration/certificates/apply', 'POST', {}
+            )
+        if (result.get('profile') or {}).get('network_trial_pending'):
+            result['restart'] = client.request(
+                '/api/v2/configuration/restart', 'POST', {}
+            )
         self.poll_device(identifier)
         return result
 

@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.3.4', addon)
+        self.assertIn('version: 2.3.5', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -237,7 +237,10 @@ class FleetAddonTests(unittest.TestCase):
             'Remote syslog',
         ):
             self.assertIn('<legend>' + group + '</legend>', self.module.HTML)
-        self.assertIn('target_scope:scope,targets,cohorts,update,profile_name:profile,activation', self.module.HTML)
+        self.assertIn(
+            'profile_name:profile,profile_fields:profileFields,activation',
+            self.module.HTML,
+        )
         self.assertNotIn('<pre id="result">', self.module.HTML)
 
     def test_devices_are_editable_and_profiles_are_first_class(self):
@@ -245,10 +248,15 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn("method:'PATCH'", self.module.HTML)
         self.assertIn('data-page-link="profiles"', self.module.HTML)
         self.assertIn('<h1>Profiles</h1>', self.module.HTML)
-        self.assertIn('<legend>Automatic updates</legend>', self.module.HTML)
-        self.assertIn('<legend>Secrets</legend>', self.module.HTML)
-        self.assertIn('Secrets are encrypted at rest', self.module.HTML)
-        self.assertIn('Saved values are displayed only as ********', self.module.HTML)
+        self.assertIn("group('Automatic updates'", self.module.HTML)
+        self.assertIn('Advanced settings and certificate deployment', self.module.HTML)
+        self.assertIn('Only selected items are pushed', self.module.HTML)
+        self.assertIn("text('wifi_ssid','Wi-Fi SSID')", self.module.HTML)
+        self.assertIn("text('wifi_password','Wi-Fi password'", self.module.HTML)
+        self.assertIn("text('mqtt_password','MQTT password'", self.module.HTML)
+        self.assertIn('data-profile-include', self.module.HTML)
+        self.assertIn('allowing a profile to change one entity', self.module.HTML)
+        self.assertIn("file('certificate_portal','portal certificate'", self.module.HTML)
         self.assertIn('/api/v2/configuration/profile', Path(
             self.module.__file__
         ).with_name('fleet_service.py').read_text())
@@ -878,6 +886,116 @@ class FleetAddonTests(unittest.TestCase):
         )
         restored.delete_profile('Production')
         self.assertEqual(restored.list_profiles(), [])
+
+    def test_selective_profile_and_certificate_material_are_encrypted(self):
+        import base64
+        from configuration_profiles import normalize_profile
+
+        certificate = base64.b64encode(b'fake-der-certificate').decode()
+        profile = normalize_profile({
+            'name': 'Syslog only',
+            'settings': {'syslog_enabled': True},
+            'secrets': {'certificate_mqtt_ca': certificate},
+        })
+        self.assertEqual(profile['settings'], {'syslog_enabled': True})
+        saved = self.module.STORE.save_profile(profile)
+        self.assertEqual(saved['secrets']['certificate_mqtt_ca'], '********')
+        database = Path(self.temp.name) / 'fleet.db'
+        self.assertNotIn(certificate.encode(), database.read_bytes())
+
+    def test_profile_application_sends_certificates_separately(self):
+        import base64
+        from fleet_service import FleetController
+
+        record = {'id': 'device-1', 'enabled': True}
+        class Store:
+            def get_device(self, _identifier, public=False):
+                return dict(record)
+
+        controller = FleetController(Store(), mock.Mock())
+        controller.poll_device = mock.Mock(return_value=record)
+        client = mock.Mock()
+        client.request.return_value = {'accepted': True}
+        controller._client = mock.Mock(return_value=client)
+        controller.apply_profile('device-1', {
+            'format_version': 1, 'name': 'Trust only', 'settings': {},
+            'secrets': {
+                'certificate_mqtt_ca': base64.b64encode(b'ca-data').decode(),
+            },
+        })
+        calls = client.request.call_args_list
+        self.assertEqual(
+            calls[0].args[:3],
+            ('/api/v2/configuration/certificates/mqtt-ca', 'POST', b'ca-data'),
+        )
+        self.assertEqual(
+            calls[1].args[0], '/api/v2/configuration/certificates/apply'
+        )
+
+    def test_network_profile_restarts_before_management_confirmation(self):
+        from fleet_service import FleetController
+
+        record = {'id': 'device-1', 'enabled': True}
+        class Store:
+            def get_device(self, _identifier, public=False):
+                return dict(record)
+
+        controller = FleetController(Store(), mock.Mock())
+        controller.poll_device = mock.Mock(return_value=record)
+        client = mock.Mock()
+        client.request.side_effect = [
+            {
+                'accepted': True,
+                'profile': {'network_trial_pending': True},
+            },
+            {'accepted': True, 'restart': {'message': 'restarting'}},
+        ]
+        controller._client = mock.Mock(return_value=client)
+
+        controller.apply_profile('device-1', {
+            'format_version': 1, 'name': 'Wi-Fi',
+            'settings': {'wifi_ssid': 'Production'}, 'secrets': {},
+        })
+
+        self.assertEqual(
+            client.request.call_args_list[1].args[0],
+            '/api/v2/configuration/restart',
+        )
+
+    def test_deployment_can_apply_one_item_from_a_larger_profile(self):
+        from fleet_service import FleetController
+
+        store = self.module.FleetStore(Path(self.temp.name) / 'selective.db')
+        self.addCleanup(store.close)
+        store.register({
+            'id': 'device-1', 'host': 'device.local',
+            'ca_path': '/ssl/ca.pem', 'cert_path': '/ssl/client.pem',
+            'key_path': '/ssl/client-key.pem',
+        })
+        store.save_profile({
+            'format_version': 1, 'name': 'Production', 'description': '',
+            'settings': {
+                'syslog_enabled': True, 'loglevel': 'DEBUG',
+            },
+            'secrets': {'mqtt_password': 'secret'},
+        })
+        controller = FleetController(store, mock.Mock())
+        controller.apply_profile = mock.Mock(return_value={'accepted': True})
+        deployment = controller.create_deployment({
+            'target_scope': 'devices', 'targets': ['device-1'],
+            'profile_name': 'Production',
+            'profile_fields': ['syslog_enabled'], 'activation': 'stage',
+        })
+
+        controller.execute_deployment_target(deployment['id'], 'device-1')
+
+        applied = controller.apply_profile.call_args.args[1]
+        self.assertEqual(applied['settings'], {'syslog_enabled': True})
+        self.assertEqual(applied['secrets'], {})
+        self.assertEqual(
+            store.get_deployment(deployment['id'])['profile_fields'],
+            ['syslog_enabled'],
+        )
 
     def test_deployment_history_and_audit_are_durable(self):
         path = Path(self.temp.name) / 'deployment-history.db'

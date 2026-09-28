@@ -123,6 +123,7 @@ class FleetRepository:
                     activation TEXT NOT NULL,
                     update_spec TEXT NOT NULL,
                     profile_name TEXT NOT NULL,
+                    profile_fields TEXT NOT NULL DEFAULT '[]',
                     targets TEXT NOT NULL,
                     results TEXT NOT NULL,
                     administrator_override INTEGER NOT NULL,
@@ -158,6 +159,15 @@ class FleetRepository:
             if 'secrets' not in profile_columns:
                 self.connection.execute(
                     "ALTER TABLE profiles ADD COLUMN secrets TEXT NOT NULL DEFAULT ''"
+                )
+            deployment_columns = {
+                row['name'] for row in self.connection.execute(
+                    'PRAGMA table_info(deployments)'
+                ).fetchall()
+            }
+            if 'profile_fields' not in deployment_columns:
+                self.connection.execute(
+                    "ALTER TABLE deployments ADD COLUMN profile_fields TEXT NOT NULL DEFAULT '[]'"
                 )
             self.connection.execute(
                 'INSERT OR IGNORE INTO metadata(key,value) VALUES(?,?)',
@@ -211,6 +221,7 @@ class FleetRepository:
             return None
         value = dict(row)
         value['update'] = _object(value.pop('update_spec'), {})
+        value['profile_fields'] = _object(value['profile_fields'], [])
         value['targets'] = _object(value['targets'], [])
         value['results'] = _object(value['results'], {})
         value['administrator_override'] = bool(value['administrator_override'])
@@ -382,6 +393,16 @@ class FleetRepository:
             raise ValueError('deployment requires 1 to 256 unique devices')
         update = request.get('update') or {}
         profile_name = str(request.get('profile_name') or '')[:64]
+        profile_fields = request.get('profile_fields') or []
+        if not isinstance(profile_fields, list):
+            raise ValueError('profile field selection must be a list')
+        profile_fields = list(dict.fromkeys(
+            str(value)[:64] for value in profile_fields if str(value)
+        ))
+        if len(profile_fields) > 64:
+            raise ValueError('too many profile fields selected')
+        if profile_fields and not profile_name:
+            raise ValueError('profile fields require a configuration profile')
         if not update and not profile_name:
             raise ValueError('select an update, a profile, or both')
         if update:
@@ -415,12 +436,12 @@ class FleetRepository:
             try:
                 self.connection.execute('''
                     INSERT INTO deployments(
-                        id,status,activation,update_spec,profile_name,targets,
-                        results,administrator_override,created_at,updated_at
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                        id,status,activation,update_spec,profile_name,profile_fields,
+                        targets,results,administrator_override,created_at,updated_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
                 ''', (
                     identifier, 'queued', activation, _json(update), profile_name,
-                    _json(targets), _json(results),
+                    _json(profile_fields), _json(targets), _json(results),
                     1 if activation == 'now' else 0, now, now,
                 ))
             except sqlite3.IntegrityError:
@@ -430,6 +451,7 @@ class FleetRepository:
             ', '.join(targets), {
                 'activation': activation, 'update': update,
                 'profile_name': profile_name,
+                'profile_fields': profile_fields,
                 'administrator_override': activation == 'now',
             }
         )

@@ -47,6 +47,13 @@ device. Scheduled deployments stage immediately and activate in each target's
 reported automatic-update slot; **Install now** is an audited administrator
 exception.
 
+Profiles are selective: each setting can be included independently when the
+profile is created, and a deployment can apply either the whole profile or a
+chosen subset. The default editor groups Wi-Fi and MQTT secrets with their
+related settings. Advanced settings add portal/API configuration and encrypted
+certificate, private-key and trust deployment. Network changes use the IoT-MD
+reboot-and-confirm rollback trial.
+
 The generic IoT Certificate Authority and IoT Syslog remain separate
 add-ons and can be used without IoT MD.
 
