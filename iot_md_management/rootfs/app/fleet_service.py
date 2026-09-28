@@ -111,6 +111,8 @@ class FleetController:
         client = self._client(record)
         try:
             inventory = client.request('/api/v2/device/inventory')
+            configuration = client.request('/api/v2/configuration')
+            inventory['configuration'] = configuration.get('configuration') or {}
             health = client.request('/api/v2/health')
             events = client.request(
                 '/api/v2/events?cursor=' + str(cursor) + '&limit=64'
@@ -119,7 +121,246 @@ class FleetController:
             self.store.set_device_error(identifier, device_connection_error(exc))
             return self.store.get_device(identifier)
         self.store.record_poll(identifier, inventory, health, events)
-        return self.store.get_device(identifier)
+        record = self.store.get_device(identifier)
+        self._reconcile_deployments(identifier, record)
+        return record
+
+    @staticmethod
+    def _update_installed(record, update):
+        device = (record.get('inventory') or {}).get('device') or {}
+        sequence = int(update.get('release_sequence', 0))
+        release_type = update.get('release_type', '')
+        application = int(device.get('release_sequence', 0) or 0)
+        firmware = int(device.get('firmware_release_sequence', 0) or 0)
+        if release_type == 'application':
+            return application >= sequence
+        if release_type == 'firmware':
+            return firmware >= sequence
+        return release_type == 'universal' and application >= sequence and firmware >= sequence
+
+    def _reconcile_deployments(self, identifier, record):
+        if not hasattr(self.store, 'list_deployments'):
+            return
+        fleet = record.get('fleet') or {}
+        for deployment in self.store.list_deployments():
+            if identifier not in deployment['targets']:
+                continue
+            current = deployment['results'].get(identifier, {}).get('status', '')
+            if current in ('complete', 'failed', 'staged'):
+                continue
+            update = deployment.get('update') or {}
+            if not update:
+                self.store.set_deployment_target(
+                    deployment['id'], identifier, 'complete', 'Profile applied'
+                )
+                continue
+            if self._update_installed(record, update):
+                self.store.set_deployment_target(
+                    deployment['id'], identifier, 'complete',
+                    (update.get('version') or 'Update') + ' installed'
+                )
+                continue
+            sequence = int(update.get('release_sequence', 0))
+            release_type = update.get('release_type', '')
+            policy_commands = (fleet.get('policy') or {}).get('commands') or []
+            matching = [
+                command for command in policy_commands
+                if int(command.get('release_sequence', 0)) == sequence and
+                (not command.get('release_type') or
+                 command.get('release_type') == release_type)
+            ]
+            pending = [
+                command for command in (fleet.get('pending_commands') or [])
+                if int(command.get('release_sequence', 0)) == sequence and
+                (not command.get('release_type') or
+                 command.get('release_type') == release_type)
+            ]
+            if matching and (
+                fleet.get('rollout_paused') or fleet.get('command_chain_failed')
+            ):
+                detail = (fleet.get('last_result') or {}).get(
+                    'detail', 'The device stopped this deployment.'
+                )
+                self.store.set_deployment_target(
+                    deployment['id'], identifier, 'failed', detail
+                )
+                continue
+            if pending:
+                action = pending[0].get('action', '')
+                status = {
+                    'check-update': 'checking',
+                    'download-update': 'staging',
+                    'activate-update': (
+                        'installing' if fleet.get('within_maintenance_window')
+                        else 'scheduled'
+                    ),
+                }.get(action, 'active')
+                detail = {
+                    'checking': 'Checking update compatibility',
+                    'staging': 'Downloading and verifying update',
+                    'installing': 'Installing update',
+                    'scheduled': 'Staged; waiting for the device update schedule',
+                    'active': 'Deployment active',
+                }[status]
+                self.store.set_deployment_target(
+                    deployment['id'], identifier, status, detail
+                )
+                continue
+            if matching and deployment['activation'] == 'stage':
+                self.store.set_deployment_target(
+                    deployment['id'], identifier, 'staged',
+                    'Update staged for later activation'
+                )
+                continue
+            if matching:
+                completed_at = int((fleet.get('last_result') or {}).get('time', 0) or 0)
+                returned_at = int(record.get('last_seen', 0) or 0)
+                if completed_at and returned_at > completed_at + 30:
+                    self.store.set_deployment_target(
+                        deployment['id'], identifier, 'failed',
+                        'Device returned on its previous version'
+                    )
+
+    @staticmethod
+    def _device_schedule(record):
+        configuration = (record.get('inventory') or {}).get('configuration') or {}
+        schedule = configuration.get('automatic_updates') or {}
+        cadence = str(schedule.get('schedule') or 'disabled')
+        check_time = str(schedule.get('time') or '')
+        if cadence not in ('daily', 'weekly'):
+            raise ValueError(
+                'The device automatic update schedule is disabled; choose Stage only '
+                'or Install now, or configure a device schedule first.'
+            )
+        start = clock_minute(check_time, 'device automatic update time')
+        weekdays = list(range(7)) if cadence == 'daily' else [
+            int(schedule.get('weekday', 0))
+        ]
+        if any(day < 0 or day > 6 for day in weekdays):
+            raise ValueError('device automatic update weekday is invalid')
+        return {
+            'weekdays': weekdays,
+            'start_minute': start,
+            'duration_minutes': 60,
+            'label': cadence.title() + ' at ' + check_time,
+        }
+
+    def create_deployment(self, request):
+        scope = str(request.get('target_scope') or 'devices')
+        devices = self.store.list_devices(public=False)
+        if scope == 'all':
+            targets = [item['id'] for item in devices if item.get('enabled')]
+        elif scope == 'cohort':
+            cohorts = {
+                str(value) for value in request.get('cohorts', ()) if str(value)
+            }
+            targets = [
+                item['id'] for item in devices
+                if item.get('enabled') and item.get('cohort') in cohorts
+            ]
+        elif scope == 'devices':
+            requested = {
+                str(value) for value in request.get('targets', ()) if str(value)
+            }
+            targets = [
+                item['id'] for item in devices
+                if item.get('enabled') and item['id'] in requested
+            ]
+            if targets != [item['id'] for item in devices if item['id'] in requested]:
+                unavailable = requested - set(targets)
+                if unavailable:
+                    raise ValueError(
+                        'deployment contains an unavailable device: ' +
+                        sorted(unavailable)[0]
+                    )
+        else:
+            raise ValueError('deployment target scope is invalid')
+        if request.get('update') and str(
+            request.get('activation') or 'schedule'
+        ) == 'schedule':
+            # Validate every target before recording/enqueueing anything. This
+            # prevents a combined profile/update deployment being only partly
+            # applied before a missing device schedule is discovered.
+            records = {item['id']: item for item in devices}
+            for target in targets:
+                try:
+                    self._device_schedule(records[target])
+                except ValueError as exc:
+                    raise ValueError(target + ': ' + str(exc)) from None
+        deployment = self.store.create_deployment(request, targets)
+        for target in targets:
+            self.store.enqueue_job(
+                'deployment', deployment['id'],
+                payload={'device_id': target},
+                idempotency_key='deployment:' + deployment['id'] + ':' + target,
+            )
+        return deployment
+
+    def execute_deployment_target(self, deployment_id, identifier):
+        deployment = self.store.get_deployment(deployment_id)
+        if not deployment:
+            raise ValueError('deployment does not exist')
+        self.store.set_deployment_target(
+            deployment_id, identifier, 'running', 'Connecting to device'
+        )
+        try:
+            if deployment.get('profile_name'):
+                profile = self.store.get_profile(deployment['profile_name'])
+                if not profile:
+                    raise ValueError('configuration profile no longer exists')
+                self.apply_profile(identifier, profile)
+                self.store.record_audit(
+                    'profile.applied', 'complete', deployment_id, identifier,
+                    {'profile_name': profile['name']}
+                )
+            update = deployment.get('update') or {}
+            if not update:
+                return self.store.set_deployment_target(
+                    deployment_id, identifier, 'complete', 'Profile applied'
+                )
+            record = self.store.get_device(identifier, public=False)
+            activation = deployment['activation']
+            if activation == 'schedule':
+                window = self._device_schedule(record)
+            else:
+                window = {
+                    'weekdays': list(range(7)), 'start_minute': 0,
+                    'duration_minutes': 1440,
+                    'label': 'Administrator override' if activation == 'now'
+                    else 'Staging only',
+                }
+            actions = ['check-update', 'download-update']
+            if activation != 'stage':
+                actions.append('activate-update')
+            self.apply_policy({
+                'device_id': identifier, 'channel': update.get('channel', 'alpha'),
+                'weekdays': window['weekdays'],
+                'start_minute': window['start_minute'],
+                'duration_minutes': window['duration_minutes'],
+                'automatic_download': True,
+                'automatic_activation': activation != 'stage',
+                'commands': [{
+                    'action': action,
+                    'release_sequence': update['release_sequence'],
+                    'release_type': update['release_type'],
+                } for action in actions],
+            })
+            status = {
+                'stage': 'staging', 'schedule': 'scheduled', 'now': 'installing'
+            }[activation]
+            detail = {
+                'stage': 'Staging update',
+                'schedule': 'Staging now; activation uses ' + window['label'],
+                'now': 'Administrator override accepted; installing now',
+            }[activation]
+            return self.store.set_deployment_target(
+                deployment_id, identifier, status, detail
+            )
+        except Exception as exc:
+            self.store.set_deployment_target(
+                deployment_id, identifier, 'failed', bounded_text(exc)
+            )
+            raise
 
     def apply_profile(self, identifier, profile):
         record = self.store.get_device(identifier, public=False)

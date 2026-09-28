@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.3.0
+
+- Replace the test-oriented portal with a consistent graphical fleet
+  experience covering Overview, Deploy, Devices, Releases, Profiles, Activity
+  and Settings.
+- Add one universal deployment workflow for an update, a configuration
+  profile, or both, targeting selected devices, one or more cohorts, or the
+  whole enabled fleet.
+- Stage scheduled updates immediately and derive activation windows from each
+  device's reported automatic-update schedule; retain an explicit, audited
+  administrator override for immediate installation.
+- Persist deployment progress and per-device outcomes, reconcile them against
+  live device state, and retain management actions in a durable audit timeline.
+- Move profile application into the deployment workflow and replace raw policy
+  and command JSON with concise, status-aware progress cards.
+- Upgrade existing version-1 data stores in place with deployment and audit
+  history tables.
+
 ## 2.2.23
 
 - Stop displaying an update as installing when the device has returned online

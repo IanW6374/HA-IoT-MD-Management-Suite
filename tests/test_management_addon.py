@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.2.23', addon)
+        self.assertIn('version: 2.3.0', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -44,11 +44,12 @@ class FleetAddonTests(unittest.TestCase):
 
     def test_ingress_uses_shared_iot_brand_shell(self):
         self.assertIn('<header class="topbar">', self.module.HTML)
-        self.assertIn('<span class="brand-mark">MD</span><span>IoT MD Management Suite</span>', self.module.HTML)
+        self.assertIn('<span class="brand-mark">IoT<br>MD</span>', self.module.HTML)
+        self.assertIn('<span>IoT MD Management Suite</span>', self.module.HTML)
         self.assertIn('<nav aria-label="Primary">', self.module.HTML)
         self.assertIn('Verified releases', self.module.HTML)
-        self.assertIn('Management Suite verification key', self.module.HTML)
-        self.assertIn('class="release-grid"', self.module.HTML)
+        self.assertIn('Management trust', self.module.HTML)
+        self.assertIn('data-page-link="activity"', self.module.HTML)
         self.assertIn('class="release-channel"', self.module.HTML)
         self.assertIn('>Not promoted</option>', self.module.HTML)
         self.assertIn('>Alpha</option>', self.module.HTML)
@@ -72,9 +73,8 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('immutable device identity', self.module.HTML)
         self.assertIn('Retry connection', self.module.HTML)
         self.assertIn("button.textContent='Retrying…'", self.module.HTML)
-        self.assertIn("button.textContent=failed?'Retry failed':'Connected'", self.module.HTML)
-        self.assertIn('Remove device', self.module.HTML)
-        self.assertIn("status.textContent='Connecting'", self.module.HTML)
+        self.assertIn("?'Retry failed':'Connected'", self.module.HTML)
+        self.assertIn('>Remove</button>', self.module.HTML)
 
     def test_device_api_identity_is_core_addon_configuration(self):
         root = Path(__file__).resolve().parents[1]
@@ -173,55 +173,38 @@ class FleetAddonTests(unittest.TestCase):
         self.assertEqual(signer.signed['commands'][0]['release_type'], 'universal')
         client.request.assert_called_once()
 
-    def test_policy_form_uses_local_start_and_end_times(self):
-        self.assertIn('name="start_time" type="time"', self.module.HTML)
-        self.assertIn('name="end_time" type="time"', self.module.HTML)
-        self.assertIn('id="maintenance-start-field" hidden', self.module.HTML)
-        self.assertIn('id="maintenance-end-field" hidden', self.module.HTML)
-        self.assertIn('start.required=scheduled', self.module.HTML)
-        self.assertIn('end.required=scheduled', self.module.HTML)
-        self.assertIn("device's configured local timezone", self.module.HTML)
+    def test_deployment_uses_device_schedule_and_explicit_admin_override(self):
+        self.assertIn('Use device schedule', self.module.HTML)
+        self.assertIn('Stage only', self.module.HTML)
+        self.assertIn('Install now', self.module.HTML)
+        self.assertIn('audited administrator exception', self.module.HTML)
+        self.assertIn('Automatic schedule disabled', self.module.HTML)
+        self.assertNotIn('name="start_time"', self.module.HTML)
+        self.assertNotIn('name="end_time"', self.module.HTML)
         self.assertNotIn('name="start_minute"', self.module.HTML)
         self.assertNotIn('name="duration_minutes"', self.module.HTML)
 
-    def test_deployment_workflow_hides_policy_implementation_details(self):
-        self.assertIn('data-page-link="deployments"', self.module.HTML)
-        self.assertIn('Deploy a verified update', self.module.HTML)
-        self.assertIn('Stage for later installation', self.module.HTML)
-        self.assertIn('Stage and install now', self.module.HTML)
-        self.assertIn('Stage and install in the maintenance window', self.module.HTML)
-        self.assertIn('Advanced cohort deployment', self.module.HTML)
+    def test_unified_deployment_workflow_hides_policy_implementation_details(self):
+        self.assertIn('data-page-link="deploy"', self.module.HTML)
+        self.assertIn('Deploy updates and profiles', self.module.HTML)
+        self.assertIn('Selected devices', self.module.HTML)
+        self.assertIn('Groups', self.module.HTML)
+        self.assertIn('All enabled', self.module.HTML)
+        self.assertIn('An update, a configuration profile, or both', self.module.HTML)
+        self.assertIn('class="flow" aria-label="Deployment workflow"', self.module.HTML)
+        self.assertIn('Deployment history', self.module.HTML)
         self.assertNotIn('data-page-link="policy"', self.module.HTML)
         self.assertNotIn('data-page-link="rollouts"', self.module.HTML)
-        self.assertIn("actions=['check-update','download-update']", self.module.HTML)
-        self.assertIn("immediate=values.deployment_action==='install-now'", self.module.HTML)
-        self.assertIn("start_time:immediate?'00:00':values.start_time", self.module.HTML)
-        self.assertIn("end_time:immediate?'00:00':values.end_time", self.module.HTML)
-        policy = self.module.HTML.split('<form id="policy">', 1)[1].split('</form>', 1)[0]
-        self.assertLess(policy.index('>Device<'), policy.index('>Update file<'))
-        self.assertIn('id="rollout-cohorts"', self.module.HTML)
-        self.assertNotIn('name="cohorts" value="canary,main"', self.module.HTML)
-        self.assertIn('id="deployment-status" class="portal-status"', self.module.HTML)
-        self.assertIn('function deploymentState(', self.module.HTML)
-        self.assertIn("label:'Installing update'", self.module.HTML)
-        self.assertIn("label:'Retry update'", self.module.HTML)
-        self.assertIn('returnedAt>completedAt+30', self.module.HTML)
-        self.assertIn('function updateInstalled(', self.module.HTML)
-        self.assertIn("['universal','application','firmware']", self.module.HTML)
-        self.assertIn('release_type:releaseType', self.module.HTML)
-        self.assertIn('release_type:release.dataset.releaseType', self.module.HTML)
-        self.assertIn("deployment started for ", self.module.HTML)
-        self.assertNotIn("+' queued for '+", self.module.HTML)
-        self.assertIn('rememberDeploymentSelection', self.module.HTML)
-        self.assertIn('MutationObserver(restoreDeploymentSelection)', self.module.HTML)
+        self.assertIn("api('api/deployments'", self.module.HTML)
+        self.assertIn('target_scope:scope,targets,cohorts,update,profile_name:profile,activation', self.module.HTML)
         self.assertNotIn('<pre id="result">', self.module.HTML)
 
     def test_devices_are_editable_and_profiles_are_first_class(self):
         self.assertIn('Edit device', self.module.HTML)
         self.assertIn("method:'PATCH'", self.module.HTML)
         self.assertIn('data-page-link="profiles"', self.module.HTML)
-        self.assertIn('Configuration profiles', self.module.HTML)
-        self.assertIn('Profiles cannot contain passwords', self.module.HTML)
+        self.assertIn('<h1>Profiles</h1>', self.module.HTML)
+        self.assertIn('Profiles exclude passwords', self.module.HTML)
         self.assertIn('/api/v2/configuration/profile', Path(
             self.module.__file__
         ).with_name('fleet_service.py').read_text())
@@ -355,7 +338,8 @@ class FleetAddonTests(unittest.TestCase):
     def test_portal_sections_have_distinct_routes_and_active_tabs(self):
         self.assertEqual(
             set(self.module.PORTAL_PAGES),
-            {'/', '/releases', '/devices', '/deployments', '/profiles', '/settings'},
+            {'/', '/deploy', '/deployments', '/releases', '/devices',
+             '/profiles', '/activity', '/settings'},
         )
         settings = self.module.render_portal('settings').decode()
         self.assertIn('<body data-page="settings">', settings)
@@ -366,15 +350,16 @@ class FleetAddonTests(unittest.TestCase):
 
     def test_portal_navigation_does_not_depend_on_javascript_for_section_visibility(self):
         self.assertIn('[data-page-section]{display:none}', self.module.HTML)
-        for page in ('overview', 'releases', 'devices', 'deployments', 'profiles', 'settings'):
+        for page in ('overview', 'deploy', 'releases', 'devices', 'profiles',
+                     'activity', 'settings'):
             self.assertIn(
                 f'body[data-page="{page}"] [data-page-section="{page}"]',
                 self.module.HTML,
             )
         deployments = self.module.render_portal('deployments').decode()
-        self.assertIn('Controlled deployment ', deployments)
-        self.assertIn('is ready. Dispatch the active cohort when ready.', deployments)
-        self.assertIn('id="rollout-status" class="portal-status"', deployments)
+        self.assertIn('<body data-page="deploy">', deployments)
+        self.assertIn('id="deployment-history"', deployments)
+        self.assertIn('id="activity-timeline"', deployments)
 
     def test_github_synchronization_is_explicitly_enabled(self):
         self.assertFalse(self.module.RELEASE_SYNC_STATE['enabled'])
@@ -827,6 +812,116 @@ class FleetAddonTests(unittest.TestCase):
         self.assertEqual(restored.list_profiles()[0]['name'], 'Production')
         restored.delete_profile('Production')
         self.assertEqual(restored.list_profiles(), [])
+
+    def test_deployment_history_and_audit_are_durable(self):
+        path = Path(self.temp.name) / 'deployment-history.db'
+        store = self.module.FleetStore(path, now=lambda: 2000000000)
+        for identifier in ('device-1', 'device-2'):
+            store.register({
+                'id': identifier, 'host': identifier + '.local',
+                'ca_path': '/ssl/ca.pem', 'cert_path': '/ssl/client.pem',
+                'key_path': '/ssl/client-key.pem',
+            })
+        deployment = store.create_deployment({
+            'activation': 'schedule', 'profile_name': 'Production',
+            'update': {
+                'release_sequence': 2785, 'release_type': 'application',
+                'version': '3.0.0-alpha.80', 'channel': 'alpha',
+            },
+        }, ['device-1', 'device-2'])
+        store.set_deployment_target(
+            deployment['id'], 'device-1', 'scheduled',
+            'Staged; waiting for the device update schedule'
+        )
+        store.set_deployment_target(
+            deployment['id'], 'device-2', 'failed', 'Device unavailable'
+        )
+        store.close()
+
+        restored = self.module.FleetStore(path, now=lambda: 2000000001)
+        self.addCleanup(restored.close)
+        saved = restored.get_deployment(deployment['id'])
+        self.assertEqual(saved['update']['release_sequence'], 2785)
+        self.assertEqual(saved['results']['device-1']['status'], 'scheduled')
+        self.assertEqual(saved['status'], 'active')
+        actions = [item['action'] for item in restored.list_audit()]
+        self.assertIn('deployment.created', actions)
+        self.assertIn('deployment.target', actions)
+
+    def test_scheduled_deployment_uses_each_device_automatic_update_slot(self):
+        from fleet_service import FleetController
+
+        store = self.module.FleetStore(Path(self.temp.name) / 'schedule.db')
+        self.addCleanup(store.close)
+        store.register({
+            'id': 'device-1', 'host': 'device.local',
+            'ca_path': '/ssl/ca.pem', 'cert_path': '/ssl/client.pem',
+            'key_path': '/ssl/client-key.pem',
+        })
+        store.record_poll('device-1', {
+            'device': {
+                'device_id': 'immutable-1', 'release_sequence': 2784,
+                'firmware_release_sequence': 2783,
+            },
+            'configuration': {'automatic_updates': {
+                'schedule': 'weekly', 'time': '02:30', 'weekday': 6,
+            }},
+            'fleet': {'device_id': 'immutable-1'},
+        }, {}, {'cursor': 0, 'events': []})
+        controller = FleetController(store, mock.Mock())
+        controller.apply_policy = mock.Mock(return_value={'accepted': True})
+        deployment = controller.create_deployment({
+            'target_scope': 'devices', 'targets': ['device-1'],
+            'activation': 'schedule',
+            'update': {
+                'release_sequence': 2785, 'release_type': 'application',
+                'version': '3.0.0-alpha.80', 'channel': 'alpha',
+            },
+        })
+
+        controller.execute_deployment_target(deployment['id'], 'device-1')
+
+        request = controller.apply_policy.call_args.args[0]
+        self.assertEqual(request['weekdays'], [6])
+        self.assertEqual(request['start_minute'], 150)
+        self.assertEqual(request['duration_minutes'], 60)
+        self.assertEqual(
+            [item['action'] for item in request['commands']],
+            ['check-update', 'download-update', 'activate-update'],
+        )
+        saved = store.get_deployment(deployment['id'])
+        self.assertEqual(saved['results']['device-1']['status'], 'scheduled')
+        self.assertFalse(saved['administrator_override'])
+
+    def test_install_now_is_recorded_as_all_day_admin_override(self):
+        from fleet_service import FleetController
+
+        store = self.module.FleetStore(Path(self.temp.name) / 'override.db')
+        self.addCleanup(store.close)
+        store.register({
+            'id': 'device-1', 'host': 'device.local',
+            'ca_path': '/ssl/ca.pem', 'cert_path': '/ssl/client.pem',
+            'key_path': '/ssl/client-key.pem',
+        })
+        controller = FleetController(store, mock.Mock())
+        controller.apply_policy = mock.Mock(return_value={'accepted': True})
+        deployment = controller.create_deployment({
+            'target_scope': 'all', 'activation': 'now',
+            'update': {
+                'release_sequence': 2785, 'release_type': 'application',
+                'version': '3.0.0-alpha.80', 'channel': 'alpha',
+            },
+        })
+
+        controller.execute_deployment_target(deployment['id'], 'device-1')
+
+        request = controller.apply_policy.call_args.args[0]
+        self.assertEqual(request['weekdays'], list(range(7)))
+        self.assertEqual(request['start_minute'], 0)
+        self.assertEqual(request['duration_minutes'], 1440)
+        self.assertTrue(store.get_deployment(
+            deployment['id']
+        )['administrator_override'])
 
     def test_durable_jobs_are_idempotent_and_retry_with_backoff(self):
         now = [1000]

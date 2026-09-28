@@ -22,6 +22,7 @@ from fleet_policy import PolicySigner
 from fleet_service import FleetController
 from configuration_profiles import normalize_profile
 from release_catalog import ArtifactVerifier, CatalogSigner, ReleaseCatalog
+from management_portal import HTML as MANAGEMENT_PORTAL_HTML
 
 
 DATA_DIRECTORY = Path(os.environ.get('IOT_MD_MANAGEMENT_DATA', '/data'))
@@ -45,7 +46,7 @@ class FleetStore(FleetRepository):
         super().__init__(path, event_retention=event_retention, now=now)
 
 
-HTML = '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+LEGACY_HTML = '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>IoT MD Management Suite</title><style>
 :root{color-scheme:light dark;--bg:#eef3f5;--panel:#fff;--ink:#17262d;--muted:#61727a;--line:#d8e3e7;--accent:#087e8b;--accent-dark:#05606a;--good:#188754;--bad:#b53333;--shadow:0 12px 34px rgba(17,42,52,.08)}
 @media(prefers-color-scheme:dark){:root{--bg:#10181c;--panel:#182329;--ink:#edf5f7;--muted:#a8b8bf;--line:#304149;--accent:#36b7c5;--accent-dark:#29949f;--good:#52cc8a;--bad:#ee7474;--shadow:0 12px 34px rgba(0,0,0,.24)}}
@@ -87,6 +88,9 @@ document.getElementById('profile-apply').onsubmit=async event=>{event.preventDef
 let selectedPolicyDevice='',selectedDeploymentRelease='';function rememberDeploymentSelection(){selectedPolicyDevice=document.getElementById('policy-device').value;selectedDeploymentRelease=document.getElementById('deployment-release').value;refreshDeploymentState()}function restoreDeploymentSelection(){let device=document.getElementById('policy-device'),release=document.getElementById('deployment-release');if(selectedPolicyDevice&&[...device.options].some(option=>option.value===selectedPolicyDevice))device.value=selectedPolicyDevice;if(selectedDeploymentRelease&&[...release.options].some(option=>option.value===selectedDeploymentRelease))release.value=selectedDeploymentRelease;refreshDeploymentState()}document.getElementById('policy-device').addEventListener('change',rememberDeploymentSelection);document.getElementById('deployment-release').addEventListener('change',rememberDeploymentSelection);new MutationObserver(restoreDeploymentSelection).observe(document.getElementById('policy-device'),{childList:true});new MutationObserver(restoreDeploymentSelection).observe(document.getElementById('deployment-release'),{childList:true});restoreDeploymentSelection();setInterval(refreshDeploymentState,15000)
 </script></body></html>'''
 
+# Keep portal presentation separate from the request handlers and fleet domain.
+HTML = MANAGEMENT_PORTAL_HTML
+
 
 def read_options():
     try:
@@ -120,12 +124,15 @@ CONTROLLER = FleetController(
 
 PORTAL_PAGES = {
     '/': 'overview', '/releases': 'releases', '/devices': 'devices',
-    '/deployments': 'deployments', '/profiles': 'profiles',
-    '/settings': 'settings',
+    '/deploy': 'deploy', '/deployments': 'deploy', '/profiles': 'profiles',
+    '/activity': 'activity', '/settings': 'settings',
 }
 
 
 def render_portal(page):
+    # Keep the former route as a direct-call alias as well as an HTTP alias.
+    if page == 'deployments':
+        page = 'deploy'
     values = {
         '__PAGE__': page,
         '__GITHUB_REPOSITORY__': OPTIONS.get(
@@ -186,6 +193,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {'devices': STORE.list_devices()})
             elif path == '/api/events':
                 self._json(200, {'events': STORE.list_events(500)})
+            elif path == '/api/audit':
+                self._json(200, {'audit': STORE.list_audit(500)})
+            elif path == '/api/deployments':
+                self._json(200, {'deployments': STORE.list_deployments(200)})
             elif path == '/api/rollouts':
                 self._json(200, {'rollouts': STORE.list_rollouts()})
             elif path == '/api/profiles':
@@ -221,23 +232,43 @@ class Handler(BaseHTTPRequestHandler):
             request = self._body()
             if path == '/api/devices':
                 result = STORE.register(request)
+                STORE.record_audit(
+                    'device.registered', 'complete', result['id'], result['host'],
+                    {'cohort': result['cohort']}
+                )
                 threading.Thread(
                     target=CONTROLLER.poll_device, args=(result['id'],), daemon=True
                 ).start()
                 self._json(201, result)
             elif path == '/api/policy':
                 self._json(202, CONTROLLER.apply_policy(request))
+            elif path == '/api/deployments':
+                self._json(202, CONTROLLER.create_deployment(request))
             elif path == '/api/profiles':
-                self._json(200, STORE.save_profile(normalize_profile(request)))
+                profile = STORE.save_profile(normalize_profile(request))
+                STORE.record_audit(
+                    'profile.saved', 'complete', profile['name'], '',
+                    {'description': profile.get('description', '')}
+                )
+                self._json(200, profile)
             elif path == '/api/profiles/apply':
                 profile = STORE.get_profile(request.get('profile', ''))
                 if not profile:
                     raise ValueError('configuration profile does not exist')
-                self._json(202, CONTROLLER.apply_profile(
-                    request.get('device_id', ''), profile
-                ))
+                target = request.get('device_id', '')
+                result = CONTROLLER.apply_profile(target, profile)
+                STORE.record_audit(
+                    'profile.applied', 'complete', profile['name'], target
+                )
+                self._json(202, result)
             elif path == '/api/poll':
                 device = CONTROLLER.poll_device(request.get('device_id', ''))
+                STORE.record_audit(
+                    'device.connection',
+                    'failed' if device.get('last_error') else 'complete',
+                    device.get('id', ''), device.get('host', ''),
+                    {'detail': device.get('last_error', '')}
+                )
                 self._json(200, {
                     'status': 'failed' if device.get('last_error') else 'connected',
                     'device': device,
@@ -263,11 +294,17 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/rollouts/advance':
                 self._json(200, STORE.advance_rollout(request.get('id', '')))
             elif path == '/api/releases/sync':
-                self._json(202, start_release_sync())
+                result = start_release_sync()
+                STORE.record_audit('release.sync', 'started')
+                self._json(202, result)
             elif path == '/api/releases/promote':
-                self._json(200, RELEASES.promote(
-                    str(request.get('tag', '')), str(request.get('channel', ''))
-                ))
+                tag = str(request.get('tag', ''))
+                channel = str(request.get('channel', ''))
+                result = RELEASES.promote(tag, channel)
+                STORE.record_audit(
+                    'release.channel', 'complete', tag, channel
+                )
+                self._json(200, result)
             else:
                 self._json(404, {'error': 'not found'})
         except (ValueError, KeyError) as exc:
@@ -287,7 +324,12 @@ class Handler(BaseHTTPRequestHandler):
             identifier = unquote(path[len(prefix):])
             if not identifier or '/' in identifier:
                 raise ValueError('device id is invalid')
-            self._json(200, STORE.update_device(identifier, self._body()))
+            changes = self._body()
+            result = STORE.update_device(identifier, changes)
+            STORE.record_audit(
+                'device.updated', 'complete', identifier, '', changes
+            )
+            self._json(200, result)
         except ValueError as exc:
             self._json(400, {'error': bounded_text(exc)})
         except Exception as exc:
@@ -300,12 +342,16 @@ class Handler(BaseHTTPRequestHandler):
                 identifier = unquote(path[len('/api/devices/'):])
                 if not identifier or '/' in identifier:
                     raise ValueError('device id is invalid')
-                self._json(200, STORE.delete_device(identifier))
+                result = STORE.delete_device(identifier)
+                STORE.record_audit('device.removed', 'complete', identifier)
+                self._json(200, result)
             elif path.startswith('/api/profiles/'):
                 name = unquote(path[len('/api/profiles/'):])
                 if not name or '/' in name:
                     raise ValueError('configuration profile name is invalid')
-                self._json(200, STORE.delete_profile(name))
+                result = STORE.delete_profile(name)
+                STORE.record_audit('profile.deleted', 'complete', name)
+                self._json(200, result)
             else:
                 self._json(404, {'error': 'not found'})
         except ValueError as exc:
@@ -338,6 +384,10 @@ def job_loop():
         try:
             if job['kind'] == 'poll':
                 CONTROLLER.poll_device(job['target'])
+            elif job['kind'] == 'deployment':
+                CONTROLLER.execute_deployment_target(
+                    job['target'], job['payload'].get('device_id', '')
+                )
             elif job['kind'] == 'rollout':
                 CONTROLLER.dispatch_rollout(job['target'])
             else:
@@ -374,6 +424,15 @@ def _release_sync():
             ), None)
             if candidate:
                 RELEASES.promote(candidate['tag'], 'beta')
+        STORE.record_audit(
+            'release.sync', 'complete', '', '',
+            {'imported': sorted(imported)}
+        )
+    except Exception as exc:
+        STORE.record_audit(
+            'release.sync', 'failed', '', '', {'detail': bounded_text(exc)}
+        )
+        raise
     finally:
         with RELEASE_SYNC_LOCK:
             RELEASE_SYNC_STATE['running'] = False

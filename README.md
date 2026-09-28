@@ -4,8 +4,9 @@ Public Home Assistant add-on repository for fleet and secure release management
 of [IoT Modular Device](https://github.com/IanW6374/IoT-Modular-Device).
 
 The single add-on provides device enrollment, mTLS inventory/health polling,
-signed fleet policy, queued commands, staged rollouts, GitHub Release
-synchronization and a dedicated HTTPS release endpoint. It imports `.iotapp`,
+a unified update/profile deployment workflow, durable deployment and audit
+history, signed fleet policy, GitHub Release synchronization and a dedicated
+HTTPS release endpoint. It imports `.iotapp`,
 `.iotcore` and `.iotuni` assets only after verifying their offline signatures,
 payload hashes, release sequence, SLSA provenance and SBOM. The offline IoT MD
 update-signing private key is never installed in Home Assistant.
@@ -39,9 +40,12 @@ and retains application/core descriptors for setup and recovery. Descriptors
 are served without caching; immutable bundles are cached. A channel keeps its
 eight newest promoted versions available to current devices while retaining a
 newest-release catalog for older device compatibility.
-Optional automatic promotion is disabled by default. Enroll devices with a CA,
-client certificate and client key from `/ssl`, then provision the displayed
-shared Management Suite verification public key on each device.
+Optional automatic promotion is disabled by default. Enroll devices using the
+shared CA, client certificate and client key configured once in the add-on,
+then provision the displayed Management Suite verification public key on each
+device. Scheduled deployments stage immediately and activate in each target's
+reported automatic-update slot; **Install now** is an audited administrator
+exception.
 
 The generic IoT Certificate Authority and IoT Syslog remain separate
 add-ons and can be used without IoT MD.

@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _json(value):
@@ -115,6 +115,29 @@ class FleetRepository:
                     settings TEXT NOT NULL,
                     updated_at INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS deployments (
+                    id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    activation TEXT NOT NULL,
+                    update_spec TEXT NOT NULL,
+                    profile_name TEXT NOT NULL,
+                    targets TEXT NOT NULL,
+                    results TEXT NOT NULL,
+                    administrator_override INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    action TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    detail TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS audit_events_created
+                    ON audit_events(created_at DESC,id DESC);
             ''')
             rollout_columns = {
                 row['name'] for row in self.connection.execute(
@@ -132,6 +155,12 @@ class FleetRepository:
             stored_version = int(self.connection.execute(
                 'SELECT value FROM metadata WHERE key=?', ('schema_version',)
             ).fetchone()['value'])
+            if stored_version == 1:
+                self.connection.execute(
+                    'UPDATE metadata SET value=? WHERE key=?',
+                    (str(SCHEMA_VERSION), 'schema_version')
+                )
+                stored_version = SCHEMA_VERSION
             if stored_version != SCHEMA_VERSION:
                 raise RuntimeError(
                     'fleet database schema ' + str(stored_version) +
@@ -163,6 +192,17 @@ class FleetRepository:
         value = dict(row)
         value['cohorts'] = _object(value['cohorts'], [])
         value['results'] = _object(value['results'], {})
+        return value
+
+    @staticmethod
+    def _deployment(row):
+        if row is None:
+            return None
+        value = dict(row)
+        value['update'] = _object(value.pop('update_spec'), {})
+        value['targets'] = _object(value['targets'], [])
+        value['results'] = _object(value['results'], {})
+        value['administrator_override'] = bool(value['administrator_override'])
         return value
 
     def register(self, record):
@@ -296,6 +336,148 @@ class FleetRepository:
                 'received_at': row['received_at'],
             })
         return result
+
+    def record_audit(self, action, status, subject='', target='', detail=None):
+        now = self.now()
+        with self.lock, self.connection:
+            cursor = self.connection.execute('''
+                INSERT INTO audit_events(
+                    action,status,subject,target,detail,created_at
+                ) VALUES(?,?,?,?,?,?)
+            ''', (
+                str(action)[:64], str(status)[:32], str(subject)[:128],
+                str(target)[:256], _json(detail or {}), now,
+            ))
+        return {
+            'id': cursor.lastrowid, 'action': str(action)[:64],
+            'status': str(status)[:32], 'subject': str(subject)[:128],
+            'target': str(target)[:256], 'detail': detail or {},
+            'created_at': now,
+        }
+
+    def list_audit(self, limit=500):
+        limit = max(1, min(self.event_retention, int(limit)))
+        with self.lock:
+            rows = self.connection.execute('''
+                SELECT * FROM audit_events ORDER BY created_at DESC,id DESC LIMIT ?
+            ''', (limit,)).fetchall()
+        return [{
+            **dict(row), 'detail': _object(row['detail'], {})
+        } for row in rows]
+
+    def create_deployment(self, request, targets):
+        targets = [str(value)[:64] for value in targets]
+        if not targets or len(targets) > 256 or len(set(targets)) != len(targets):
+            raise ValueError('deployment requires 1 to 256 unique devices')
+        update = request.get('update') or {}
+        profile_name = str(request.get('profile_name') or '')[:64]
+        if not update and not profile_name:
+            raise ValueError('select an update, a profile, or both')
+        if update:
+            release_sequence = int(update.get('release_sequence', 0))
+            release_type = str(update.get('release_type') or '')
+            if release_sequence <= 0:
+                raise ValueError('deployment update sequence must be positive')
+            if release_type not in ('application', 'firmware', 'universal'):
+                raise ValueError('deployment update type is invalid')
+            update = {
+                'release_sequence': release_sequence,
+                'release_type': release_type,
+                'version': str(update.get('version') or '')[:64],
+                'channel': str(update.get('channel') or 'alpha')[:16],
+            }
+        activation = str(request.get('activation') or 'schedule')
+        if activation not in ('stage', 'schedule', 'now'):
+            raise ValueError('deployment activation mode is invalid')
+        identifier = str(request.get('id') or (
+            'deployment-' + str(self.now()) + '-' +
+            str(self.next_policy_sequence())
+        ))[:64]
+        results = {
+            target: {
+                'status': 'queued', 'detail': 'Waiting to start',
+                'updated_at': self.now(),
+            } for target in targets
+        }
+        now = self.now()
+        with self.lock, self.connection:
+            try:
+                self.connection.execute('''
+                    INSERT INTO deployments(
+                        id,status,activation,update_spec,profile_name,targets,
+                        results,administrator_override,created_at,updated_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                ''', (
+                    identifier, 'queued', activation, _json(update), profile_name,
+                    _json(targets), _json(results),
+                    1 if activation == 'now' else 0, now, now,
+                ))
+            except sqlite3.IntegrityError:
+                raise ValueError('deployment id already exists')
+        self.record_audit(
+            'deployment.created', 'queued', identifier,
+            ', '.join(targets), {
+                'activation': activation, 'update': update,
+                'profile_name': profile_name,
+                'administrator_override': activation == 'now',
+            }
+        )
+        return self.get_deployment(identifier)
+
+    def get_deployment(self, identifier):
+        with self.lock:
+            row = self.connection.execute(
+                'SELECT * FROM deployments WHERE id=?', (str(identifier),)
+            ).fetchone()
+        return self._deployment(row)
+
+    def list_deployments(self, limit=200):
+        limit = max(1, min(1000, int(limit)))
+        with self.lock:
+            rows = self.connection.execute('''
+                SELECT * FROM deployments ORDER BY created_at DESC,id DESC LIMIT ?
+            ''', (limit,)).fetchall()
+        return [self._deployment(row) for row in rows]
+
+    def set_deployment_target(self, identifier, device_id, status, detail=''):
+        terminal = {'complete', 'failed', 'staged'}
+        with self.lock, self.connection:
+            deployment = self.get_deployment(identifier)
+            if not deployment:
+                raise ValueError('deployment does not exist')
+            if device_id not in deployment['targets']:
+                raise ValueError('device is not part of this deployment')
+            previous = deployment['results'].get(device_id, {}).get('status', '')
+            deployment['results'][device_id] = {
+                'status': str(status)[:32], 'detail': str(detail)[:256],
+                'updated_at': self.now(),
+            }
+            states = [
+                value.get('status', 'queued')
+                for value in deployment['results'].values()
+            ]
+            if any(value not in terminal for value in states):
+                overall = 'active'
+            elif all(value == 'failed' for value in states):
+                overall = 'failed'
+            elif any(value == 'failed' for value in states):
+                overall = 'partial'
+            elif all(value == 'staged' for value in states):
+                overall = 'staged'
+            else:
+                overall = 'complete'
+            self.connection.execute('''
+                UPDATE deployments SET status=?,results=?,updated_at=? WHERE id=?
+            ''', (
+                overall, _json(deployment['results']), self.now(),
+                str(identifier),
+            ))
+        if previous != status:
+            self.record_audit(
+                'deployment.target', status, identifier, device_id,
+                {'detail': str(detail)[:256], 'previous': previous}
+            )
+        return self.get_deployment(identifier)
 
     def save_profile(self, profile):
         with self.lock, self.connection:
