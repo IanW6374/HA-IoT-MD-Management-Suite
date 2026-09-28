@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.4
+
+- Add automatic-update parameters to reusable configuration profiles.
+- Encrypt Wi-Fi and MQTT profile passwords at rest and expose only fixed masks through the portal and public API.
+- Remove the decorative deployment-form milestone strip while retaining live progress for in-flight deployments.
+
 ## 2.3.3
 
 - Remove duplicate status, version and internal identifier details from deployment history.

@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.3.3', addon)
+        self.assertIn('version: 2.3.4', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -191,7 +191,9 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('Groups', self.module.HTML)
         self.assertIn('All enabled', self.module.HTML)
         self.assertIn('An update, a configuration profile, or both', self.module.HTML)
-        self.assertIn('class="flow" aria-label="Deployment workflow"', self.module.HTML)
+        self.assertIn("document.querySelector('#deployment-form>.panel>.flow')", self.module.HTML)
+        self.assertIn('if(workflow)workflow.remove()', self.module.HTML)
+        self.assertNotIn('aria-label="Deployment workflow"', self.module.HTML)
         self.assertIn('id="deployment-active"', self.module.HTML)
         self.assertIn('Deployment history', self.module.HTML)
         self.assertNotIn('data-page-link="policy"', self.module.HTML)
@@ -243,7 +245,10 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn("method:'PATCH'", self.module.HTML)
         self.assertIn('data-page-link="profiles"', self.module.HTML)
         self.assertIn('<h1>Profiles</h1>', self.module.HTML)
-        self.assertIn('Profiles exclude passwords', self.module.HTML)
+        self.assertIn('<legend>Automatic updates</legend>', self.module.HTML)
+        self.assertIn('<legend>Secrets</legend>', self.module.HTML)
+        self.assertIn('Secrets are encrypted at rest', self.module.HTML)
+        self.assertIn('Saved values are displayed only as ********', self.module.HTML)
         self.assertIn('/api/v2/configuration/profile', Path(
             self.module.__file__
         ).with_name('fleet_service.py').read_text())
@@ -842,13 +847,35 @@ class FleetAddonTests(unittest.TestCase):
             'description': 'Common settings',
             'settings': {
                 'timezone_name': 'Europe/London', 'ha_discovery': True,
+                'release_channel': 'alpha',
+                'release_check_schedule': 'weekly',
+                'release_check_time': '03:30',
+                'release_check_weekday': 6,
+                'release_auto_download': True,
+                'release_auto_activate': False,
+            },
+            'secrets': {
+                'wifi_password': 'correct horse battery staple',
+                'mqtt_password': 'broker-secret',
             },
         })
         self.assertEqual(profile['settings']['timezone_name'], 'Europe/London')
+        self.assertEqual(profile['secrets'], {
+            'wifi_password': '********', 'mqtt_password': '********',
+        })
+        self.assertNotIn(b'correct horse battery staple', path.read_bytes())
+        self.assertNotIn(b'broker-secret', path.read_bytes())
+        private_profile = store.get_profile('Production', include_secrets=True)
+        self.assertEqual(
+            private_profile['secrets']['mqtt_password'], 'broker-secret'
+        )
         store.close()
         restored = self.module.FleetStore(path)
         self.addCleanup(restored.close)
         self.assertEqual(restored.list_profiles()[0]['name'], 'Production')
+        self.assertEqual(
+            restored.list_profiles()[0]['secrets']['wifi_password'], '********'
+        )
         restored.delete_profile('Production')
         self.assertEqual(restored.list_profiles(), [])
 

@@ -23,6 +23,7 @@ from fleet_service import FleetController
 from configuration_profiles import normalize_profile
 from release_catalog import ArtifactVerifier, CatalogSigner, ReleaseCatalog
 from management_portal import HTML as MANAGEMENT_PORTAL_HTML
+from profile_secrets import ProfileSecretCipher
 
 
 DATA_DIRECTORY = Path(os.environ.get('IOT_MD_MANAGEMENT_DATA', '/data'))
@@ -31,6 +32,7 @@ STATE_PATH = DATA_DIRECTORY / 'fleet.db'
 SIGNING_KEY_PATH = DATA_DIRECTORY / 'fleet-signing-key.pem'
 PUBLIC_KEY_PATH = DATA_DIRECTORY / 'fleet-verification-key.bin'
 RELEASE_STATE_PATH = DATA_DIRECTORY / 'release-inventory.json'
+PROFILE_SECRET_KEY_PATH = DATA_DIRECTORY / 'profile-secrets.key'
 RELEASE_ROOT = Path(os.environ.get('IOT_MD_RELEASE_ROOT', '/share/iot-md-releases'))
 TRUSTED_UPDATE_KEY_PATH = APP_DIRECTORY / 'iot-md-update-verification-key.hex'
 
@@ -42,8 +44,13 @@ def bounded_text(value, maximum=256):
 class FleetStore(FleetRepository):
     """Fleet repository with the add-on's standard database location."""
 
-    def __init__(self, path=STATE_PATH, event_retention=5000, now=None):
-        super().__init__(path, event_retention=event_retention, now=now)
+    def __init__(self, path=STATE_PATH, event_retention=5000, now=None,
+                 secret_key_path=None):
+        key_path = secret_key_path or Path(path).with_name('profile-secrets.key')
+        super().__init__(
+            path, event_retention=event_retention, now=now,
+            profile_cipher=ProfileSecretCipher(key_path)
+        )
 
 
 LEGACY_HTML = '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
@@ -100,7 +107,10 @@ def read_options():
 
 
 OPTIONS = read_options()
-STORE = FleetStore(event_retention=int(OPTIONS.get('event_retention', 5000)))
+STORE = FleetStore(
+    event_retention=int(OPTIONS.get('event_retention', 5000)),
+    secret_key_path=PROFILE_SECRET_KEY_PATH,
+)
 SIGNER = PolicySigner(SIGNING_KEY_PATH, PUBLIC_KEY_PATH)
 CATALOG_SIGNER = CatalogSigner(SIGNING_KEY_PATH, PUBLIC_KEY_PATH)
 RELEASES = ReleaseCatalog(
@@ -252,7 +262,9 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self._json(200, profile)
             elif path == '/api/profiles/apply':
-                profile = STORE.get_profile(request.get('profile', ''))
+                profile = STORE.get_profile(
+                    request.get('profile', ''), include_secrets=True
+                )
                 if not profile:
                     raise ValueError('configuration profile does not exist')
                 target = request.get('device_id', '')

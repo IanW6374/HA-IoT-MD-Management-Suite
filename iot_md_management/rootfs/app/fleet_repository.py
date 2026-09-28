@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _json(value):
@@ -23,11 +23,12 @@ def _object(value, default):
 
 
 class FleetRepository:
-    def __init__(self, path, event_retention=5000, now=None):
+    def __init__(self, path, event_retention=5000, now=None, profile_cipher=None):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.event_retention = max(100, int(event_retention))
         self.now = now or (lambda: int(time.time()))
+        self.profile_cipher = profile_cipher
         self.lock = threading.RLock()
         self.connection = sqlite3.connect(
             str(self.path), check_same_thread=False, isolation_level=None
@@ -113,6 +114,7 @@ class FleetRepository:
                     name TEXT PRIMARY KEY,
                     description TEXT NOT NULL,
                     settings TEXT NOT NULL,
+                    secrets TEXT NOT NULL DEFAULT '',
                     updated_at INTEGER NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS deployments (
@@ -148,6 +150,15 @@ class FleetRepository:
                 self.connection.execute(
                     "ALTER TABLE rollouts ADD COLUMN release_type TEXT NOT NULL DEFAULT ''"
                 )
+            profile_columns = {
+                row['name'] for row in self.connection.execute(
+                    'PRAGMA table_info(profiles)'
+                ).fetchall()
+            }
+            if 'secrets' not in profile_columns:
+                self.connection.execute(
+                    "ALTER TABLE profiles ADD COLUMN secrets TEXT NOT NULL DEFAULT ''"
+                )
             self.connection.execute(
                 'INSERT OR IGNORE INTO metadata(key,value) VALUES(?,?)',
                 ('schema_version', str(SCHEMA_VERSION))
@@ -155,7 +166,7 @@ class FleetRepository:
             stored_version = int(self.connection.execute(
                 'SELECT value FROM metadata WHERE key=?', ('schema_version',)
             ).fetchone()['value'])
-            if stored_version == 1:
+            if stored_version in (1, 2):
                 self.connection.execute(
                     'UPDATE metadata SET value=? WHERE key=?',
                     (str(SCHEMA_VERSION), 'schema_version')
@@ -480,21 +491,26 @@ class FleetRepository:
         return self.get_deployment(identifier)
 
     def save_profile(self, profile):
+        existing = self.get_profile(profile['name'], include_secrets=True)
+        secrets = dict((existing or {}).get('secrets', {}))
+        secrets.update(profile.get('secrets', {}))
+        encrypted = self.profile_cipher.encrypt(secrets) if self.profile_cipher else ''
         with self.lock, self.connection:
             self.connection.execute('''
-                INSERT INTO profiles(name,description,settings,updated_at)
-                VALUES(?,?,?,?)
+                INSERT INTO profiles(name,description,settings,secrets,updated_at)
+                VALUES(?,?,?,?,?)
                 ON CONFLICT(name) DO UPDATE SET
                     description=excluded.description,
                     settings=excluded.settings,
+                    secrets=excluded.secrets,
                     updated_at=excluded.updated_at
             ''', (
                 profile['name'], profile.get('description', ''),
-                _json(profile['settings']), self.now(),
+                _json(profile['settings']), encrypted, self.now(),
             ))
         return self.get_profile(profile['name'])
 
-    def get_profile(self, name):
+    def get_profile(self, name, include_secrets=False):
         with self.lock:
             row = self.connection.execute(
                 'SELECT * FROM profiles WHERE name=?', (str(name),)
@@ -504,6 +520,11 @@ class FleetRepository:
         value = dict(row)
         value['format_version'] = 1
         value['settings'] = _object(value['settings'], {})
+        encrypted = value.pop('secrets', '')
+        secrets = self.profile_cipher.decrypt(encrypted) if self.profile_cipher else {}
+        value['secrets'] = secrets if include_secrets else (
+            self.profile_cipher.masked(secrets) if self.profile_cipher else {}
+        )
         return value
 
     def list_profiles(self):

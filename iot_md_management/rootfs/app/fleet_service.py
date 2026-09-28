@@ -305,7 +305,9 @@ class FleetController:
         )
         try:
             if deployment.get('profile_name'):
-                profile = self.store.get_profile(deployment['profile_name'])
+                profile = self.store.get_profile(
+                    deployment['profile_name'], include_secrets=True
+                )
                 if not profile:
                     raise ValueError('configuration profile no longer exists')
                 self.apply_profile(identifier, profile)
