@@ -4,9 +4,9 @@ Public Home Assistant add-on repository for fleet and secure release management
 of [IoT Modular Device](https://github.com/IanW6374/IoT-Modular-Device).
 
 The single add-on provides device enrollment, mTLS inventory/health polling,
-a unified update/profile deployment workflow, durable deployment and audit
-history, signed fleet policy, GitHub Release synchronization and a dedicated
-HTTPS release endpoint. It imports `.iotapp`,
+a unified update/profile deployment workflow, encrypted complete-device backup
+and restore, durable deployment and audit history, signed fleet policy, GitHub
+Release synchronization and a dedicated HTTPS release endpoint. It imports `.iotapp`,
 `.iotcore` and `.iotuni` assets only after verifying their offline signatures,
 payload hashes, release sequence, SLSA provenance and SBOM. The offline IoT MD
 update-signing private key is never installed in Home Assistant.
@@ -14,6 +14,23 @@ update-signing private key is never installed in Home Assistant.
 Successful synchronization treats the GitHub Releases list as authoritative:
 releases deleted upstream are removed from verified inventory together with
 their unreferenced local files and obsolete channel catalogs.
+
+## Profiles and complete backups
+
+Profiles are reusable configuration patches or baselines. The profile builder
+starts empty, lets an administrator search for and add only the settings the
+profile owns, and keeps advanced certificates and trust material out of the
+normal editing path. A deployment can still select an individual profile item,
+such as enabling syslog, without pushing the remainder of the profile.
+
+Backups are separate from profiles. An IoT-MD device creates a complete
+AES-GCM-encrypted backup containing settings, secrets, module configuration,
+certificates, private keys, API trust and management state. Management stores
+only that opaque envelope; the unique recovery password is independently
+encrypted with the add-on's local data key. Automatic daily or weekly capture,
+per-device retention, manual recovery points, redacted restore preview and
+confirmed same-device or compatible-device restore are available on the
+Backups page.
 
 ## Install
 

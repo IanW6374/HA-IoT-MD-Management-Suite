@@ -63,7 +63,7 @@ def normalize_profile(profile):
     if not isinstance(profile, dict):
         raise ValueError('configuration profile must be an object')
     unknown = set(profile) - {
-        'format_version', 'name', 'description', 'settings', 'secrets'
+        'format_version', 'name', 'description', 'profile_type', 'settings', 'secrets'
     }
     if unknown:
         raise ValueError('unknown configuration profile field: ' + sorted(unknown)[0])
@@ -162,8 +162,12 @@ def normalize_profile(profile):
             )
     if not normalized and not normalized_secrets:
         raise ValueError('configuration profile must contain at least one setting')
+    profile_type = str(profile.get('profile_type') or 'patch').lower()
+    if profile_type not in ('patch', 'baseline'):
+        raise ValueError('configuration profile type is invalid')
     return {
         'format_version': FORMAT_VERSION,
+        'profile_type': profile_type,
         'name': _text(profile.get('name'), 'configuration profile name', 64),
         'description': _text(profile.get('description', ''), 'configuration profile description', 256, True),
         'settings': normalized,

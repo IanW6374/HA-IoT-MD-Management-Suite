@@ -135,8 +135,46 @@ CONTROLLER = FleetController(
 PORTAL_PAGES = {
     '/': 'overview', '/releases': 'releases', '/devices': 'devices',
     '/deploy': 'deploy', '/deployments': 'deploy', '/profiles': 'profiles',
-    '/activity': 'activity', '/settings': 'settings',
+    '/activity': 'activity', '/backups': 'backups', '/settings': 'settings',
 }
+
+
+def backup_settings():
+    defaults = {
+        'enabled': False, 'cadence': 'daily', 'time': '02:00',
+        'weekday': 0, 'retention': 7,
+    }
+    try:
+        value = json.loads(STORE.metadata('backup_settings', '{}'))
+    except Exception:
+        value = {}
+    if isinstance(value, dict):
+        defaults.update(value)
+    return defaults
+
+
+def update_backup_settings(request):
+    value = {
+        'enabled': bool(request.get('enabled', False)),
+        'cadence': str(request.get('cadence') or 'daily'),
+        'time': str(request.get('time') or '02:00'),
+        'weekday': int(request.get('weekday', 0)),
+        'retention': int(request.get('retention', 7)),
+    }
+    if value['cadence'] not in ('daily', 'weekly'):
+        raise ValueError('backup cadence is invalid')
+    parts = value['time'].split(':')
+    if len(parts) != 2 or not all(part.isdigit() for part in parts):
+        raise ValueError('backup time must use HH:MM')
+    if not 0 <= int(parts[0]) <= 23 or not 0 <= int(parts[1]) <= 59:
+        raise ValueError('backup time is invalid')
+    if not 0 <= value['weekday'] <= 6:
+        raise ValueError('backup weekday is invalid')
+    if not 1 <= value['retention'] <= 365:
+        raise ValueError('backup retention must be between 1 and 365')
+    STORE.set_metadata('backup_settings', json.dumps(value, separators=(',', ':')))
+    STORE.record_audit('backup.schedule', 'complete', '', '', value)
+    return value
 
 
 def render_portal(page):
@@ -211,6 +249,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {'rollouts': STORE.list_rollouts()})
             elif path == '/api/profiles':
                 self._json(200, {'profiles': STORE.list_profiles()})
+            elif path == '/api/backups':
+                self._json(200, {
+                    'backups': STORE.list_backups(),
+                    'settings': backup_settings(),
+                })
             elif path == '/api/releases':
                 with RELEASE_SYNC_LOCK:
                     sync = dict(RELEASE_SYNC_STATE)
@@ -273,6 +316,29 @@ class Handler(BaseHTTPRequestHandler):
                     'profile.applied', 'complete', profile['name'], target
                 )
                 self._json(202, result)
+            elif path == '/api/backups':
+                target = str(request.get('device_id') or '')
+                if not STORE.get_device(target):
+                    raise ValueError('device is not registered')
+                self._json(202, STORE.enqueue_job(
+                    'backup', target,
+                    payload={'source': 'manual'},
+                    idempotency_key='backup:manual:' + target + ':' + str(int(time.time())),
+                ))
+            elif path == '/api/backups/settings':
+                self._json(200, update_backup_settings(request))
+            elif path.startswith('/api/backups/') and path.endswith('/preview'):
+                identifier = path[len('/api/backups/'):-len('/preview')]
+                self._json(200, CONTROLLER.preview_backup_restore(
+                    int(identifier), request.get('target_device_id', ''),
+                    request.get('sections')
+                ))
+            elif path.startswith('/api/backups/') and path.endswith('/restore'):
+                identifier = path[len('/api/backups/'):-len('/restore')]
+                self._json(202, CONTROLLER.restore_backup(
+                    int(identifier), request.get('target_device_id', ''),
+                    request.get('confirmation', ''), request.get('sections')
+                ))
             elif path == '/api/poll':
                 device = CONTROLLER.poll_device(request.get('device_id', ''))
                 STORE.record_audit(
@@ -364,6 +430,11 @@ class Handler(BaseHTTPRequestHandler):
                 result = STORE.delete_profile(name)
                 STORE.record_audit('profile.deleted', 'complete', name)
                 self._json(200, result)
+            elif path.startswith('/api/backups/'):
+                identifier = path[len('/api/backups/'):]
+                result = STORE.delete_backup(int(identifier))
+                STORE.record_audit('backup.deleted', 'complete', identifier)
+                self._json(200, result)
             else:
                 self._json(404, {'error': 'not found'})
         except ValueError as exc:
@@ -407,6 +478,12 @@ def job_loop():
                 )
             elif job['kind'] == 'rollout':
                 CONTROLLER.dispatch_rollout(job['target'])
+            elif job['kind'] == 'backup':
+                settings = backup_settings()
+                CONTROLLER.create_backup(
+                    job['target'], job['payload'].get('source', 'scheduled'),
+                    settings['retention']
+                )
             else:
                 raise ValueError('unsupported fleet job: ' + str(job['kind']))
         except Exception as exc:
@@ -420,6 +497,28 @@ RELEASE_SYNC_STATE = {
     'enabled': bool(OPTIONS.get('github_sync_enabled', False)),
     'running': False, 'started_at': 0, 'completed_at': 0,
 }
+
+
+def backup_schedule_loop():
+    while True:
+        settings = backup_settings()
+        now = time.localtime()
+        hour, minute = (int(part) for part in settings['time'].split(':'))
+        today = '%04d-%03d' % (now.tm_year, now.tm_yday)
+        due = now.tm_hour * 60 + now.tm_min >= hour * 60 + minute
+        if settings['cadence'] == 'weekly':
+            due = due and now.tm_wday == settings['weekday']
+        if (
+            settings['enabled'] and due and
+            STORE.metadata('backup_last_schedule_date', '') != today
+        ):
+            for identifier in STORE.device_ids(enabled_only=True):
+                STORE.enqueue_job(
+                    'backup', identifier, payload={'source': 'scheduled'},
+                    idempotency_key='backup:scheduled:' + identifier + ':' + today,
+                )
+            STORE.set_metadata('backup_last_schedule_date', today)
+        time.sleep(30)
 
 
 def _release_sync():
@@ -479,6 +578,7 @@ def release_sync_loop():
 def main():
     threading.Thread(target=poll_loop, daemon=True).start()
     threading.Thread(target=job_loop, daemon=True).start()
+    threading.Thread(target=backup_schedule_loop, daemon=True).start()
     if RELEASE_SYNC_STATE['enabled']:
         threading.Thread(target=release_sync_loop, daemon=True).start()
     ThreadingHTTPServer(('127.0.0.1', 8098), Handler).serve_forever()

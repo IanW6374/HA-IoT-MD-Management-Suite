@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _json(value):
@@ -113,6 +113,7 @@ class FleetRepository:
                 CREATE TABLE IF NOT EXISTS profiles (
                     name TEXT PRIMARY KEY,
                     description TEXT NOT NULL,
+                    profile_type TEXT NOT NULL DEFAULT 'patch',
                     settings TEXT NOT NULL,
                     secrets TEXT NOT NULL DEFAULT '',
                     updated_at INTEGER NOT NULL
@@ -141,6 +142,21 @@ class FleetRepository:
                 );
                 CREATE INDEX IF NOT EXISTS audit_events_created
                     ON audit_events(created_at DESC,id DESC);
+                CREATE TABLE IF NOT EXISTS backups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id TEXT NOT NULL,
+                    device_name TEXT NOT NULL,
+                    application_version TEXT NOT NULL,
+                    firmware_version TEXT NOT NULL,
+                    envelope TEXT NOT NULL,
+                    recovery_secret TEXT NOT NULL,
+                    digest TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    source TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS backups_device_created
+                    ON backups(device_id,created_at DESC,id DESC);
             ''')
             rollout_columns = {
                 row['name'] for row in self.connection.execute(
@@ -160,6 +176,10 @@ class FleetRepository:
                 self.connection.execute(
                     "ALTER TABLE profiles ADD COLUMN secrets TEXT NOT NULL DEFAULT ''"
                 )
+            if 'profile_type' not in profile_columns:
+                self.connection.execute(
+                    "ALTER TABLE profiles ADD COLUMN profile_type TEXT NOT NULL DEFAULT 'patch'"
+                )
             deployment_columns = {
                 row['name'] for row in self.connection.execute(
                     'PRAGMA table_info(deployments)'
@@ -176,7 +196,7 @@ class FleetRepository:
             stored_version = int(self.connection.execute(
                 'SELECT value FROM metadata WHERE key=?', ('schema_version',)
             ).fetchone()['value'])
-            if stored_version in (1, 2):
+            if stored_version in (1, 2, 3):
                 self.connection.execute(
                     'UPDATE metadata SET value=? WHERE key=?',
                     (str(SCHEMA_VERSION), 'schema_version')
@@ -192,6 +212,103 @@ class FleetRepository:
                 'INSERT OR IGNORE INTO metadata(key,value) VALUES(?,?)',
                 ('next_policy_sequence', '1')
             )
+
+    def metadata(self, key, default=None):
+        with self.lock:
+            row = self.connection.execute(
+                'SELECT value FROM metadata WHERE key=?', (str(key),)
+            ).fetchone()
+        return default if row is None else row['value']
+
+    def set_metadata(self, key, value):
+        with self.lock, self.connection:
+            self.connection.execute('''
+                INSERT INTO metadata(key,value) VALUES(?,?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            ''', (str(key), str(value)))
+        return value
+
+    @staticmethod
+    def _backup(row, include_payload=False, profile_cipher=None):
+        if row is None:
+            return None
+        value = dict(row)
+        value['id'] = int(value['id'])
+        if include_payload:
+            value['envelope'] = _object(value['envelope'], {})
+            if profile_cipher is None:
+                raise RuntimeError('backup recovery encryption is unavailable')
+            value['password'] = profile_cipher.decrypt(
+                value.pop('recovery_secret')
+            ).get('password', '')
+        else:
+            value.pop('envelope', None)
+            value.pop('recovery_secret', None)
+        return value
+
+    def save_backup(self, device, envelope, password, source='manual'):
+        if self.profile_cipher is None:
+            raise RuntimeError('backup recovery encryption is unavailable')
+        if not isinstance(envelope, dict) or envelope.get('format') != 'iotmd-secure-backup':
+            raise ValueError('device returned an invalid complete backup')
+        encoded = _json(envelope)
+        import hashlib
+        digest = hashlib.sha256(encoded.encode()).hexdigest()
+        inventory = (device.get('inventory') or {}).get('device') or {}
+        now = self.now()
+        with self.lock, self.connection:
+            cursor = self.connection.execute('''
+                INSERT INTO backups(
+                    device_id,device_name,application_version,firmware_version,
+                    envelope,recovery_secret,digest,size_bytes,source,created_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)
+            ''', (
+                str(device.get('id') or '')[:64],
+                str(device.get('name') or device.get('id') or '')[:64],
+                str(inventory.get('application_version') or '')[:64],
+                str(inventory.get('firmware_version') or '')[:64], encoded,
+                self.profile_cipher.encrypt({'password': str(password)}),
+                digest, len(encoded.encode()), str(source)[:32], now,
+            ))
+        return self.get_backup(cursor.lastrowid)
+
+    def get_backup(self, identifier, include_payload=False):
+        with self.lock:
+            row = self.connection.execute(
+                'SELECT * FROM backups WHERE id=?', (int(identifier),)
+            ).fetchone()
+        return self._backup(row, include_payload, self.profile_cipher)
+
+    def list_backups(self, limit=500):
+        limit = max(1, min(2000, int(limit)))
+        with self.lock:
+            rows = self.connection.execute('''
+                SELECT * FROM backups ORDER BY created_at DESC,id DESC LIMIT ?
+            ''', (limit,)).fetchall()
+        return [self._backup(row) for row in rows]
+
+    def delete_backup(self, identifier):
+        with self.lock, self.connection:
+            cursor = self.connection.execute(
+                'DELETE FROM backups WHERE id=?', (int(identifier),)
+            )
+        if cursor.rowcount != 1:
+            raise ValueError('backup does not exist')
+        return {'deleted': True, 'id': int(identifier)}
+
+    def enforce_backup_retention(self, device_id, keep):
+        keep = max(1, min(365, int(keep)))
+        with self.lock, self.connection:
+            rows = self.connection.execute('''
+                SELECT id FROM backups WHERE device_id=?
+                ORDER BY created_at DESC,id DESC LIMIT -1 OFFSET ?
+            ''', (str(device_id), keep)).fetchall()
+            if rows:
+                self.connection.executemany(
+                    'DELETE FROM backups WHERE id=?',
+                    [(row['id'],) for row in rows]
+                )
+        return len(rows)
 
     @staticmethod
     def _device(row, public=True):
@@ -519,15 +636,17 @@ class FleetRepository:
         encrypted = self.profile_cipher.encrypt(secrets) if self.profile_cipher else ''
         with self.lock, self.connection:
             self.connection.execute('''
-                INSERT INTO profiles(name,description,settings,secrets,updated_at)
-                VALUES(?,?,?,?,?)
+                INSERT INTO profiles(name,description,profile_type,settings,secrets,updated_at)
+                VALUES(?,?,?,?,?,?)
                 ON CONFLICT(name) DO UPDATE SET
                     description=excluded.description,
+                    profile_type=excluded.profile_type,
                     settings=excluded.settings,
                     secrets=excluded.secrets,
                     updated_at=excluded.updated_at
             ''', (
                 profile['name'], profile.get('description', ''),
+                profile.get('profile_type', 'patch'),
                 _json(profile['settings']), encrypted, self.now(),
             ))
         return self.get_profile(profile['name'])

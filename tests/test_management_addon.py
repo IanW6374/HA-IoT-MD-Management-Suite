@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.3.6', addon)
+        self.assertIn('version: 2.4.0', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -391,7 +391,7 @@ class FleetAddonTests(unittest.TestCase):
         self.assertEqual(
             set(self.module.PORTAL_PAGES),
             {'/', '/deploy', '/deployments', '/releases', '/devices',
-             '/profiles', '/activity', '/settings'},
+             '/profiles', '/activity', '/backups', '/settings'},
         )
         settings = self.module.render_portal('settings').decode()
         self.assertIn('<body data-page="settings">', settings)
@@ -902,6 +902,77 @@ class FleetAddonTests(unittest.TestCase):
         self.assertEqual(saved['secrets']['certificate_mqtt_ca'], '********')
         database = Path(self.temp.name) / 'fleet.db'
         self.assertNotIn(certificate.encode(), database.read_bytes())
+
+    def test_complete_backup_envelope_and_recovery_password_are_retained_securely(self):
+        path = Path(self.temp.name) / 'backups.db'
+        store = self.module.FleetStore(path)
+        self.addCleanup(store.close)
+        device = store.register({
+            'id': 'device-1', 'name': 'Plant room', 'host': 'device.local',
+            'ca_path': '/ssl/ca.pem', 'cert_path': '/ssl/client.pem',
+            'key_path': '/ssl/client-key.pem',
+        })
+        device['inventory'] = {'device': {
+            'application_version': '3.0.0-alpha.89',
+            'firmware_version': '3.0.0-alpha.88',
+        }}
+        envelope = {
+            'format': 'iotmd-secure-backup', 'format_version': 2,
+            'ciphertext': 'encrypted-device-configuration', 'tag': 'tag',
+        }
+
+        saved = store.save_backup(
+            device, envelope, 'unique-recovery-password', 'manual'
+        )
+
+        self.assertNotIn('envelope', saved)
+        self.assertNotIn('password', saved)
+        self.assertNotIn(b'unique-recovery-password', path.read_bytes())
+        private = store.get_backup(saved['id'], include_payload=True)
+        self.assertEqual(private['envelope'], envelope)
+        self.assertEqual(private['password'], 'unique-recovery-password')
+        self.assertEqual(private['application_version'], '3.0.0-alpha.89')
+
+    def test_backup_restore_is_previewed_before_confirmed_apply(self):
+        from fleet_service import FleetController
+
+        store = self.module.FleetStore(Path(self.temp.name) / 'restore.db')
+        self.addCleanup(store.close)
+        store.register({
+            'id': 'device-1', 'name': 'Source', 'host': 'source.local',
+            'ca_path': '/ssl/ca.pem', 'cert_path': '/ssl/client.pem',
+            'key_path': '/ssl/client-key.pem',
+        })
+        source = store.get_device('device-1', public=False)
+        backup = store.save_backup(source, {
+            'format': 'iotmd-secure-backup', 'format_version': 2,
+            'ciphertext': 'ciphertext', 'tag': 'tag',
+        }, 'recovery-password', 'manual')
+        client = mock.Mock()
+        client.request.side_effect = [
+            {'preview': {'token': 'preview-token', 'change_count': 4}},
+            {'accepted': True, 'restore': 'restart required'},
+        ]
+        controller = FleetController(store, mock.Mock())
+        controller._client = mock.Mock(return_value=client)
+
+        with self.assertRaisesRegex(ValueError, 'type "restore device-1"'):
+            controller.restore_backup(backup['id'], 'device-1', 'yes')
+        result = controller.restore_backup(
+            backup['id'], 'device-1', 'restore device-1'
+        )
+
+        self.assertEqual(result['preview']['change_count'], 4)
+        self.assertEqual(
+            client.request.call_args_list[0].args[0],
+            '/api/v2/configuration/backups/preview',
+        )
+        self.assertEqual(
+            client.request.call_args_list[1].args,
+            ('/api/v2/configuration/backups/apply', 'POST', {
+                'token': 'preview-token'
+            }),
+        )
 
     def test_profile_application_sends_certificates_separately(self):
         import base64

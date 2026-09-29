@@ -4,6 +4,7 @@ import http.client
 import base64
 import json
 import os
+import secrets
 import ssl
 import time
 import urllib.request
@@ -104,6 +105,76 @@ class FleetController:
         settings = dict(record)
         settings.update(self.tls)
         return DeviceClient(settings, self.timeout if timeout is None else timeout)
+
+    def create_backup(self, identifier, source='manual', retention=7):
+        record = self.store.get_device(identifier, public=False)
+        if not record:
+            raise ValueError('device is not registered')
+        if not record.get('enabled'):
+            raise ValueError('device is disabled')
+        password = secrets.token_urlsafe(32)
+        result = self._client(record, timeout=max(self.timeout, 60)).request(
+            '/api/v2/configuration/backups', 'POST', {'password': password}
+        )
+        backup = self.store.save_backup(
+            record, result.get('backup') or {}, password, source
+        )
+        removed = self.store.enforce_backup_retention(identifier, retention)
+        self.store.record_audit(
+            'backup.created', 'complete', str(backup['id']), identifier, {
+                'source': source, 'size_bytes': backup['size_bytes'],
+                'digest': backup['digest'], 'retention_removed': removed,
+            }
+        )
+        return backup
+
+    def preview_backup_restore(self, backup_id, target_id, sections=None):
+        backup = self.store.get_backup(backup_id, include_payload=True)
+        if not backup:
+            raise ValueError('backup does not exist')
+        target = self.store.get_device(target_id, public=False)
+        if not target:
+            raise ValueError('target device is not registered')
+        selected = sections or [
+            'credentials', 'module_settings', 'certificates_and_trust'
+        ]
+        result = self._client(target, timeout=max(self.timeout, 60)).request(
+            '/api/v2/configuration/backups/preview', 'POST', {
+                'backup': backup['envelope'], 'password': backup['password'],
+                'sections': selected,
+            }
+        )
+        preview = result.get('preview') or {}
+        preview.update({
+            'backup_id': backup['id'],
+            'source_device_id': backup['device_id'],
+            'source_device_name': backup['device_name'],
+            'target_device_id': target_id,
+            'cross_device': backup['device_id'] != target_id,
+            'sections': selected,
+        })
+        return preview
+
+    def restore_backup(self, backup_id, target_id, confirmation, sections=None):
+        expected = 'restore ' + str(target_id)
+        if str(confirmation or '').strip().lower() != expected.lower():
+            raise ValueError('type "' + expected + '" to confirm complete restore')
+        preview = self.preview_backup_restore(backup_id, target_id, sections)
+        target = self.store.get_device(target_id, public=False)
+        result = self._client(target, timeout=max(self.timeout, 60)).request(
+            '/api/v2/configuration/backups/apply', 'POST', {
+                'token': preview.get('token', '')
+            }
+        )
+        self.store.record_audit(
+            'backup.restored', 'complete', str(backup_id), target_id, {
+                'source_device_id': preview['source_device_id'],
+                'sections': preview['sections'],
+                'change_count': preview.get('change_count', 0),
+                'cross_device': preview['cross_device'],
+            }
+        )
+        return {'preview': preview, 'result': result}
 
     def poll_device(self, identifier):
         record = self.store.get_device(identifier, public=False)
@@ -421,6 +492,8 @@ class FleetController:
             for name in certificate_kinds if protected.get(name)
         }
         device_profile = dict(profile)
+        device_profile.pop('profile_type', None)
+        device_profile.pop('updated_at', None)
         device_profile['secrets'] = protected
         if device_profile.get('settings') or protected:
             result = client.request(

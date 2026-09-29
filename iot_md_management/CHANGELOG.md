@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.4.0
+
+- Replace the full profile matrix with a patch-first searchable setting picker
+  and an optional baseline seed while retaining deployment-time item selection.
+- Label saved profiles as Patch or Baseline and keep encrypted secrets beside
+  their relevant settings without exposing their stored values.
+- Add scheduled and manual complete-device backups. Devices encrypt the full
+  configuration before transfer and Management separately encrypts each unique
+  recovery password at rest.
+- Add per-device retention, backup history, redacted restore preview, typed
+  confirmation and selective or complete restore to a compatible managed
+  device.
+
 ## 2.3.4
 
 - Add automatic-update parameters to reusable configuration profiles.
