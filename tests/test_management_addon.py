@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.4.0', addon)
+        self.assertIn('version: 2.4.1', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -242,6 +242,20 @@ class FleetAddonTests(unittest.TestCase):
             self.module.HTML,
         )
         self.assertNotIn('<pre id="result">', self.module.HTML)
+
+    def test_profile_picker_and_backup_device_loading_are_concise(self):
+        self.assertNotIn('Profile type<select', self.module.HTML)
+        self.assertIn('Use baseline set', self.module.HTML)
+        self.assertIn("remove.className='badge profile-remove'", self.module.HTML)
+        self.assertIn("advanced?.classList.toggle('hidden',!showAdvanced)", self.module.HTML)
+        self.assertIn(
+            '#profile-editor>.profile-sections>.profile-group:first-child,.profile-picker{grid-column:1/-1}',
+            self.module.HTML,
+        )
+        self.assertIn(
+            "Promise.all([api('api/backups'),api('api/devices')])",
+            self.module.HTML,
+        )
 
     def test_devices_are_editable_and_profiles_are_first_class(self):
         self.assertIn('Edit device', self.module.HTML)

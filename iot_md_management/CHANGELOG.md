@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.4.1
+
+- Load the enabled-device inventory directly with the Backups page so the
+  manual backup and restore target selectors cannot render before devices.
+- Remove the superfluous Profile type selector; Use baseline set now simply
+  adds the recommended settings to the same selective profile builder.
+- Put name and description on a full-width first row with the setting picker
+  below it.
+- Replace the prominent Remove button with a small badge beside each selected
+  setting name and hide the advanced container until it owns a selected item.
+
 ## 2.4.0
 
 - Replace the full profile matrix with a patch-first searchable setting picker
