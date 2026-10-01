@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.4.7
+
+- Render the encrypted marker as a compact inline badge immediately after the
+  complete-configuration recovery-point title.
+- Pair with IoT-MD Alpha 90, which accepts the bounded encrypted envelope on
+  restore preview even when its retained core has an older general body limit.
+
 ## 2.4.6
 
 - Explain that an authorization failure is being retried automatically and

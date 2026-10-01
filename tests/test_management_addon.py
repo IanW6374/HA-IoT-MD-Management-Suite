@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.4.6', addon)
+        self.assertIn('version: 2.4.7', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -77,6 +77,14 @@ class FleetAddonTests(unittest.TestCase):
             capture_output=True, text=True,
         )
         self.assertEqual(check.returncode, 0, check.stderr)
+
+    def test_recovery_point_encrypted_badge_is_compact_and_inline(self):
+        title = '${esc(item.device_name)} · complete configuration</strong>'
+        badge = '<span class="badge good backup-encrypted">Encrypted</span>'
+
+        self.assertIn('.badge.backup-encrypted{', self.module.HTML)
+        self.assertIn('<div class="backup-title"><strong>' + title + badge,
+                      self.module.HTML)
 
     def test_device_enrollment_has_guidance_and_management_actions(self):
         self.assertIn('placeholder="IoT-MD-002"', self.module.HTML)
