@@ -44,5 +44,8 @@ configuration:
   auto_promote_beta:
     name: Automatically promote prereleases
     description: Promote the newest newly imported prerelease to Beta after verification.
+  auto_promote_alpha:
+    name: Automatically promote Alpha releases
+    description: Promote the newest newly imported Alpha release to Alpha after verification.
 network:
   8443/tcp: IoT-MD signed release endpoint

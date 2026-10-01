@@ -1,5 +1,5 @@
 name: IoT MD Management Suite
-version: 2.4.2
+version: 2.4.3
 slug: iot_md_management
 description: Fleet, policy, staged rollout and secure release management for IoT MD devices
 url: https://github.com/IanW6374/HA-IoT-MD-Management-Suite
@@ -42,6 +42,7 @@ options:
   release_sync_interval_s: 3600
   auto_promote_stable: false
   auto_promote_beta: false
+  auto_promote_alpha: false
 schema:
   certfile: str
   keyfile: str
@@ -58,3 +59,4 @@ schema:
   release_sync_interval_s: int(300,86400)
   auto_promote_stable: bool
   auto_promote_beta: bool
+  auto_promote_alpha: bool

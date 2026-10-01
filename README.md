@@ -56,8 +56,11 @@ Beta or Alpha. Promotion prefers the universal bundle for automatic upgrades
 and retains application/core descriptors for setup and recovery. Descriptors
 are served without caching; immutable bundles are cached. A channel keeps its
 eight newest promoted versions available to current devices while retaining a
-newest-release catalog for older device compatibility.
-Optional automatic promotion is disabled by default. Enroll devices using the
+newest-release catalog for older device compatibility. Optional automatic
+promotion is disabled by default. Stable, Beta and Alpha promotion can each
+be enabled independently; when both
+prerelease options are enabled, Alpha-tagged versions stay on Alpha and other
+prereleases use Beta. Enroll devices using the
 shared CA, client certificate and client key configured once in the add-on,
 then provision the displayed Management Suite verification public key on each
 device. Scheduled deployments stage immediately and activate in each target's

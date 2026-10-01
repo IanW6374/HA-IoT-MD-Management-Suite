@@ -196,6 +196,9 @@ def render_portal(page):
         '__AUTO_PROMOTE_BETA__': 'Enabled' if OPTIONS.get(
             'auto_promote_beta', False
         ) else 'Disabled',
+        '__AUTO_PROMOTE_ALPHA__': 'Enabled' if OPTIONS.get(
+            'auto_promote_alpha', False
+        ) else 'Disabled',
         '__FLEET_KEY_FINGERPRINT__': hashlib.sha256(
             PUBLIC_KEY_PATH.read_bytes()
         ).hexdigest(),
@@ -533,10 +536,24 @@ def _release_sync():
             ), None)
             if candidate:
                 RELEASES.promote(candidate['tag'], 'stable')
+        auto_promote_alpha = OPTIONS.get('auto_promote_alpha', False)
+        if imported and auto_promote_alpha:
+            candidate = next((
+                item for item in inventory.get('releases', [])
+                if item['tag'] in imported and item.get('prerelease') and
+                'alpha' in (str(item.get('version', '')) + ' ' +
+                            str(item.get('tag', ''))).lower()
+            ), None)
+            if candidate:
+                RELEASES.promote(candidate['tag'], 'alpha')
         if imported and OPTIONS.get('auto_promote_beta', False):
             candidate = next((
                 item for item in inventory.get('releases', [])
-                if item['tag'] in imported and item.get('prerelease')
+                if item['tag'] in imported and item.get('prerelease') and (
+                    not auto_promote_alpha or
+                    'alpha' not in (str(item.get('version', '')) + ' ' +
+                                    str(item.get('tag', ''))).lower()
+                )
             ), None)
             if candidate:
                 RELEASES.promote(candidate['tag'], 'beta')

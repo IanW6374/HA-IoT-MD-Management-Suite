@@ -3,7 +3,9 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -28,12 +30,14 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.4.2', addon)
+        self.assertIn('version: 2.4.3', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
         self.assertIn('github_sync_enabled: bool', addon)
+        self.assertIn('auto_promote_alpha: false', addon)
+        self.assertIn('auto_promote_alpha: bool', addon)
         self.assertIn(
             'release_base_url: https://iot-upgrade.home.arpa:8443', addon
         )
@@ -60,6 +64,19 @@ class FleetAddonTests(unittest.TestCase):
         expected = hashlib.sha256(self.module.PUBLIC_KEY_PATH.read_bytes()).hexdigest()
         self.assertIn(expected, settings)
         self.assertNotIn('__FLEET_KEY_FINGERPRINT__', settings)
+        self.assertIn('Automatic Alpha promotion', settings)
+        self.assertNotIn('__AUTO_PROMOTE_ALPHA__', settings)
+
+    def test_generated_portal_javascript_parses(self):
+        runtime = shutil.which('node') or shutil.which('qjs')
+        if not runtime:
+            self.skipTest('Node.js or QuickJS is required for JavaScript syntax validation')
+        script = self.module.HTML.split('<script>', 1)[1].split('</script>', 1)[0]
+        check = subprocess.run(
+            [runtime, '-e', 'new Function(' + json.dumps(script) + ');'],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(check.returncode, 0, check.stderr)
 
     def test_device_enrollment_has_guidance_and_management_actions(self):
         self.assertIn('placeholder="IoT-MD-002"', self.module.HTML)
@@ -434,6 +451,35 @@ class FleetAddonTests(unittest.TestCase):
         self.assertFalse(self.module.RELEASE_SYNC_STATE['enabled'])
         with self.assertRaisesRegex(ValueError, 'disabled in add-on settings'):
             self.module.start_release_sync()
+
+    def test_release_sync_promotes_alpha_without_overwriting_it_as_beta(self):
+        releases = mock.Mock()
+        releases.sync.return_value = {
+            'imported': ['v3.0.0-alpha.90', 'v3.0.0-beta.1'],
+            'inventory': {'releases': [
+                {
+                    'tag': 'v3.0.0-alpha.90', 'version': '3.0.0-alpha.90',
+                    'prerelease': True,
+                },
+                {
+                    'tag': 'v3.0.0-beta.1', 'version': '3.0.0-beta.1',
+                    'prerelease': True,
+                },
+            ]},
+        }
+        with mock.patch.object(self.module, 'RELEASES', releases), mock.patch.dict(
+            self.module.OPTIONS,
+            {'auto_promote_alpha': True, 'auto_promote_beta': True},
+        ):
+            self.module._release_sync()
+
+        self.assertEqual(
+            releases.promote.call_args_list,
+            [
+                mock.call('v3.0.0-alpha.90', 'alpha'),
+                mock.call('v3.0.0-beta.1', 'beta'),
+            ],
+        )
 
     def test_release_sync_removes_github_deleted_inventory_and_assets(self):
         from release_catalog import ReleaseCatalog

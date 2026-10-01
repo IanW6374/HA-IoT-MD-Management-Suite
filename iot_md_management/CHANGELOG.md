@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.4.3
+
+- Fix a generated portal JavaScript syntax error that prevented devices,
+  releases, profiles and deployment data from rendering in 2.4.2; persisted
+  management data was not removed.
+- Add an Automatic Alpha Promotion add-on option and show its effective state
+  on the Management settings page.
+- Keep Alpha-tagged prereleases on the Alpha channel when both automatic Alpha
+  and Beta promotion are enabled, while other prereleases continue to Beta.
+- Validate the generated portal JavaScript during the test suite before a
+  release can be published.
+
 ## 2.4.2
 
 - Render successful device, release, profile, deployment and activity responses
