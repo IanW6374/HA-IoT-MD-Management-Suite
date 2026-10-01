@@ -28,7 +28,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.4.1', addon)
+        self.assertIn('version: 2.4.2', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -256,6 +256,9 @@ class FleetAddonTests(unittest.TestCase):
             "Promise.all([api('api/backups'),api('api/devices')])",
             self.module.HTML,
         )
+        self.assertIn('Promise.allSettled', self.module.HTML)
+        self.assertIn('Some management data could not be loaded', self.module.HTML)
+        self.assertIn("if(activePage==='profiles')", self.module.HTML)
 
     def test_devices_are_editable_and_profiles_are_first_class(self):
         self.assertIn('Edit device', self.module.HTML)
@@ -848,6 +851,35 @@ class FleetAddonTests(unittest.TestCase):
         self.assertNotIn('key_path', device)
         self.assertEqual(restored.list_events()[0]['event']['kind'], 'boot')
         self.assertEqual(path.read_bytes()[:16], b'SQLite format 3\x00')
+
+    def test_schema_three_upgrade_preserves_existing_fleet_data(self):
+        path = Path(self.temp.name) / 'upgrade.db'
+        store = self.module.FleetStore(path)
+        store.register({
+            'id': 'device-1', 'name': 'Retained device', 'host': 'device.local',
+            'ca_path': '/ssl/ca.pem', 'cert_path': '/ssl/client.pem',
+            'key_path': '/ssl/client-key.pem',
+        })
+        store.close()
+        connection = sqlite3.connect(path)
+        connection.execute('ALTER TABLE profiles DROP COLUMN profile_type')
+        connection.execute(
+            "UPDATE metadata SET value='3' WHERE key='schema_version'"
+        )
+        connection.commit()
+        connection.close()
+
+        upgraded = self.module.FleetStore(path)
+        self.addCleanup(upgraded.close)
+
+        self.assertEqual(upgraded.get_device('device-1')['name'], 'Retained device')
+        columns = {
+            row['name'] for row in upgraded.connection.execute(
+                'PRAGMA table_info(profiles)'
+            ).fetchall()
+        }
+        self.assertIn('profile_type', columns)
+        self.assertEqual(upgraded.metadata('schema_version'), '4')
 
     def test_device_cohort_edit_and_configuration_profiles_persist(self):
         path = Path(self.temp.name) / 'editable.db'

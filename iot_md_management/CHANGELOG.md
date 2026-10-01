@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.4.2
+
+- Render successful device, release, profile, deployment and activity responses
+  independently so one failed endpoint can no longer blank the entire portal.
+- Display the name and error from any failed data endpoint at the top of the
+  page while retaining all successfully loaded data.
+- Initialize the profile builder only on the Profiles page and the backup data
+  only on the Backups page, isolating optional UI features from other tabs.
+- Add migration coverage proving an existing schema-3 device inventory is
+  retained when the encrypted-backup schema is introduced.
+
 ## 2.4.1
 
 - Load the enabled-device inventory directly with the Backups page so the
