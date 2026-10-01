@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.4.4
+
+- Replace the browser-dependent profile datalist with a grouped setting
+  selector that exposes every standard and advanced setting explicitly.
+- Label advanced Portal, API, certificate and trust groups in the selector,
+  reveal the advanced panel automatically when one is selected, and prevent
+  already-added settings from being selected twice.
+
 ## 2.4.3
 
 - Fix a generated portal JavaScript syntax error that prevented devices,

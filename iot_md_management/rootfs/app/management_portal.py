@@ -91,7 +91,70 @@ HTML = HTML.replace(
 )
 
 _BACKUP_SCRIPT = r'''
-function enhanceProfileDesigner(){const form=document.getElementById('profile-editor');if(!form||form.dataset.designer==='true')return;form.dataset.designer='true';const first=form.querySelector('.profile-group'),advanced=form.querySelector('details'),toolbar=document.createElement('section');toolbar.className='profile-picker';toolbar.innerHTML=`<label>Add a setting<input id="profile-setting-search" list="profile-setting-options" placeholder="Search settings"><datalist id="profile-setting-options"></datalist></label><div class="actions"><span id="profile-selected-count" class="badge">0 selected</span><button class="secondary" type="button" id="profile-add-setting">Add setting</button><button class="secondary" type="button" id="profile-baseline">Use baseline set</button></div>`;first.after(toolbar);const entries=[...form.querySelectorAll('.profile-entry')],options=toolbar.querySelector('datalist');for(const entry of entries){const control=entry.querySelector('[name]'),include=entry.querySelector('[data-profile-include]'),label=entry.dataset.label,fieldLabel=control.closest('label'),heading=document.createElement('div'),remove=document.createElement('button');entry.dataset.settingName=control.name;entry.classList.add('hidden');include.closest('label').classList.add('hidden');heading.className='profile-entry-heading';heading.innerHTML=`<strong>${esc(label)}</strong>`;remove.type='button';remove.className='badge profile-remove';remove.textContent='Remove';remove.setAttribute('aria-label',`Remove ${label}`);remove.onclick=()=>{include.checked=false;entry.classList.add('hidden');updateProfileDesigner()};heading.append(remove);for(const node of [...fieldLabel.childNodes])if(node.nodeType===3)node.remove();entry.prepend(heading);options.insertAdjacentHTML('beforeend',`<option value="${esc(label)}" data-name="${esc(control.name)}"></option>`)}function add(name){const entry=entries.find(item=>item.dataset.settingName===name);if(!entry)return;entry.querySelector('[data-profile-include]').checked=true;entry.classList.remove('hidden');updateProfileDesigner();if(advanced?.contains(entry))advanced.setAttribute('open','');entry.querySelector('[name]')?.focus()}function updateProfileDesigner(){const selected=entries.filter(item=>item.querySelector('[data-profile-include]').checked),count=selected.length;document.getElementById('profile-selected-count').textContent=`${count} selected`;for(const group of form.querySelectorAll('.profile-group')){if(group===first)continue;group.classList.toggle('hidden',![...group.querySelectorAll('.profile-entry')].some(item=>!item.classList.contains('hidden')))}const showAdvanced=advanced&&selected.some(item=>advanced.contains(item));advanced?.classList.toggle('hidden',!showAdvanced);if(advanced&&!showAdvanced)advanced.removeAttribute('open')}window.updateProfileDesigner=updateProfileDesigner;toolbar.querySelector('#profile-add-setting').onclick=()=>{const input=toolbar.querySelector('#profile-setting-search'),option=[...options.options].find(item=>item.value.toLowerCase()===input.value.trim().toLowerCase());if(option){add(option.dataset.name);input.value=''}};toolbar.querySelector('#profile-baseline').onclick=()=>{['timezone_name','ntp_servers','loglevel','log_buffer_lines','ha_discovery','ha_discovery_prefix','mqtt_enabled','mqtt_port','mqtt_qos','syslog_enabled','syslog_port','syslog_transport','release_channel','release_check_schedule','release_check_time','release_auto_download','release_auto_activate'].forEach(add)};toolbar.querySelector('#profile-setting-search').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();toolbar.querySelector('#profile-add-setting').click()}});updateProfileDesigner()}
+function enhanceProfileDesigner(){
+  const form=document.getElementById('profile-editor');
+  if(!form||form.dataset.designer==='true')return;
+  form.dataset.designer='true';
+  const first=form.querySelector('.profile-group'),advanced=form.querySelector('details'),toolbar=document.createElement('section');
+  toolbar.className='profile-picker';
+  toolbar.innerHTML=`<label>Add a setting<select id="profile-setting-select"><option value="">Choose a setting</option></select></label><div class="actions"><span id="profile-selected-count" class="badge">0 selected</span><button class="secondary" type="button" id="profile-add-setting">Add setting</button><button class="secondary" type="button" id="profile-baseline">Use baseline set</button></div>`;
+  first.after(toolbar);
+  const entries=[...form.querySelectorAll('.profile-entry')],selector=toolbar.querySelector('#profile-setting-select'),groups=new Map();
+  for(const entry of entries){
+    const control=entry.querySelector('[name]'),include=entry.querySelector('[data-profile-include]'),label=entry.dataset.label,fieldLabel=control.closest('label'),heading=document.createElement('div'),remove=document.createElement('button'),fieldset=entry.closest('.profile-group'),section=fieldset?.querySelector('legend')?.textContent||'Settings';
+    entry.dataset.settingName=control.name;
+    entry.classList.add('hidden');
+    include.closest('label').classList.add('hidden');
+    heading.className='profile-entry-heading';
+    heading.innerHTML=`<strong>${esc(label)}</strong>`;
+    remove.type='button';
+    remove.className='badge profile-remove';
+    remove.textContent='Remove';
+    remove.setAttribute('aria-label',`Remove ${label}`);
+    remove.onclick=()=>{include.checked=false;entry.classList.add('hidden');updateProfileDesigner()};
+    heading.append(remove);
+    for(const node of [...fieldLabel.childNodes])if(node.nodeType===3)node.remove();
+    entry.prepend(heading);
+    if(!groups.has(section)){
+      const group=document.createElement('optgroup');
+      group.label=advanced?.contains(entry)?`Advanced — ${section}`:section;
+      groups.set(section,group);
+      selector.append(group);
+    }
+    const option=document.createElement('option');
+    option.value=control.name;
+    option.textContent=label;
+    groups.get(section).append(option);
+  }
+  function add(name){
+    const entry=entries.find(item=>item.dataset.settingName===name);
+    if(!entry)return;
+    entry.querySelector('[data-profile-include]').checked=true;
+    entry.classList.remove('hidden');
+    updateProfileDesigner();
+    if(advanced?.contains(entry))advanced.setAttribute('open','');
+    entry.querySelector('[name]')?.focus();
+  }
+  function updateProfileDesigner(){
+    const selected=entries.filter(item=>item.querySelector('[data-profile-include]').checked),count=selected.length;
+    document.getElementById('profile-selected-count').textContent=`${count} selected`;
+    for(const group of form.querySelectorAll('.profile-group')){
+      if(group===first)continue;
+      group.classList.toggle('hidden',![...group.querySelectorAll('.profile-entry')].some(item=>!item.classList.contains('hidden')));
+    }
+    const showAdvanced=advanced&&selected.some(item=>advanced.contains(item));
+    advanced?.classList.toggle('hidden',!showAdvanced);
+    if(advanced&&!showAdvanced)advanced.removeAttribute('open');
+    for(const option of selector.options){
+      if(option.value)option.disabled=selected.some(item=>item.dataset.settingName===option.value);
+    }
+  }
+  window.updateProfileDesigner=updateProfileDesigner;
+  toolbar.querySelector('#profile-add-setting').onclick=()=>{if(selector.value){add(selector.value);selector.value=''}};
+  selector.addEventListener('change',()=>{if(selector.value){add(selector.value);selector.value=''}});
+  toolbar.querySelector('#profile-baseline').onclick=()=>{['timezone_name','ntp_servers','loglevel','log_buffer_lines','ha_discovery','ha_discovery_prefix','mqtt_enabled','mqtt_port','mqtt_qos','syslog_enabled','syslog_port','syslog_transport','release_channel','release_check_schedule','release_check_time','release_auto_download','release_auto_activate'].forEach(add)};
+  updateProfileDesigner();
+}
 const backupState={items:[],settings:{}};
 function backupDeviceOptions(selected=''){return state.devices.filter(item=>item.enabled).map(item=>`<option value="${esc(item.id)}" ${item.id===selected?'selected':''}>${esc(item.name)} · ${esc(item.id)}</option>`).join('')}
 function backupSize(value){if(value<1024)return value+' B';if(value<1048576)return (value/1024).toFixed(1)+' KiB';return (value/1048576).toFixed(1)+' MiB'}

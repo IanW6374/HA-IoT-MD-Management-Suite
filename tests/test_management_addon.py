@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.4.3', addon)
+        self.assertIn('version: 2.4.4', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -265,6 +265,9 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('Use baseline set', self.module.HTML)
         self.assertIn("remove.className='badge profile-remove'", self.module.HTML)
         self.assertIn("advanced?.classList.toggle('hidden',!showAdvanced)", self.module.HTML)
+        self.assertIn('id="profile-setting-select"', self.module.HTML)
+        self.assertIn('Advanced — ${section}', self.module.HTML)
+        self.assertIn("selector.addEventListener('change'", self.module.HTML)
         self.assertIn(
             '#profile-editor>.profile-sections>.profile-group:first-child,.profile-picker{grid-column:1/-1}',
             self.module.HTML,
