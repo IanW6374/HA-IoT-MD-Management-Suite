@@ -842,6 +842,13 @@ class FleetRepository:
         value['payload'] = _object(value['payload'], {})
         return value
 
+    def get_job(self, identifier):
+        with self.lock:
+            row = self.connection.execute(
+                'SELECT * FROM jobs WHERE id=?', (int(identifier),)
+            ).fetchone()
+        return self._job(row)
+
     def claim_job(self):
         now = self.now()
         with self.lock, self.connection:

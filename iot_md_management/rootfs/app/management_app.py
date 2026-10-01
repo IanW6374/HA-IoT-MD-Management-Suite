@@ -257,6 +257,12 @@ class Handler(BaseHTTPRequestHandler):
                     'backups': STORE.list_backups(),
                     'settings': backup_settings(),
                 })
+            elif path.startswith('/api/jobs/'):
+                identifier = path[len('/api/jobs/'):]
+                job = STORE.get_job(int(identifier))
+                if not job:
+                    raise ValueError('background job does not exist')
+                self._json(200, {'job': job})
             elif path == '/api/releases':
                 with RELEASE_SYNC_LOCK:
                     sync = dict(RELEASE_SYNC_STATE)

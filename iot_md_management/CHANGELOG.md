@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.4.5
+
+- Follow manual encrypted-backup jobs from queue through creation, transfer
+  and persistence instead of refreshing once before the device can finish.
+- Refresh Recovery points automatically when the backup completes and expose
+  retry or terminal failure details rather than leaving a stale queued notice.
+- Keep the Create backup action disabled while its background job is active.
+
 ## 2.4.4
 
 - Replace the browser-dependent profile datalist with a grouped setting
