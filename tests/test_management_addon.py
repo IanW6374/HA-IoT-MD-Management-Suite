@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.4.9', addon)
+        self.assertIn('version: 2.5.0', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -267,6 +267,13 @@ class FleetAddonTests(unittest.TestCase):
             self.module.HTML,
         )
         self.assertNotIn('<pre id="result">', self.module.HTML)
+
+    def test_release_filter_defaults_to_promoted_and_can_show_all(self):
+        self.assertIn("let releaseFilter='promoted'", self.module.HTML)
+        self.assertIn("setReleaseView('promoted')", self.module.HTML)
+        self.assertIn("setReleaseView('all')", self.module.HTML)
+        self.assertIn("state.releases.filter(item=>(item.channels||[]).length)", self.module.HTML)
+        self.assertIn('No releases are promoted. Select All', self.module.HTML)
 
     def test_profile_picker_and_backup_device_loading_are_concise(self):
         self.assertNotIn('Profile type<select', self.module.HTML)
@@ -1380,6 +1387,9 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('<th>Current configuration</th>', self.module.HTML)
         self.assertIn('<th>Backup configuration</th>', self.module.HTML)
         self.assertIn("rows.filter(row=>row.state!=='same').length", self.module.HTML)
+        self.assertIn('function renderBackupProgress(jobs=[]){', self.module.HTML)
+        self.assertIn("operationFlow(['Queued','Encrypt & transfer','Stored']", self.module.HTML)
+        self.assertIn('renderBackupProgress(jobs)', self.module.HTML)
         self.assertNotIn('change(s) will be applied', self.module.HTML)
 
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.5.0
+
+- Default Verified releases to promoted versions, with an explicit All view for channel administration.
+- Show live graphical milestone progress for deployments and encrypted backup jobs.
+- Align operation states and controls with the IoT-MD update experience.
+
 ## 2.4.9
 
 - Replace the restore-preview count-only message with a structured comparison
