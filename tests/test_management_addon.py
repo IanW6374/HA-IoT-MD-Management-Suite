@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.4.8', addon)
+        self.assertIn('version: 2.4.9', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -1053,7 +1053,21 @@ class FleetAddonTests(unittest.TestCase):
         }, 'recovery-password', 'manual')
         client = mock.Mock()
         client.request.side_effect = [
-            {'preview': {'token': 'preview-token', 'change_count': 4}},
+            {'preview': {
+                'token': 'preview-token', 'change_count': 2,
+                'changes': [
+                    {
+                        'path': 'Logging', 'before': 'INFO', 'after': 'DEBUG',
+                        'state': 'changed',
+                    },
+                    {
+                        'path': 'Secret credentials',
+                        'before': 'Protected credentials present',
+                        'after': 'Protected credentials present',
+                        'state': 'same',
+                    },
+                ],
+            }},
             {'accepted': True, 'restore': 'restart required'},
         ]
         controller = FleetController(store, mock.Mock())
@@ -1065,7 +1079,8 @@ class FleetAddonTests(unittest.TestCase):
             backup['id'], 'device-1', 'restore device-1'
         )
 
-        self.assertEqual(result['preview']['change_count'], 4)
+        self.assertEqual(result['preview']['change_count'], 2)
+        self.assertEqual(result['preview']['changes'][0]['path'], 'Logging')
         self.assertEqual(
             client.request.call_args_list[0].args[0],
             '/api/v2/configuration/backups/preview',
@@ -1361,6 +1376,11 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('name="backup_target_scope" value="all"', self.module.HTML)
         self.assertIn('signature!==backupState.renderSignature', self.module.HTML)
         self.assertIn('refreshBackups(true)', self.module.HTML)
+        self.assertIn('function backupPreviewTable(preview)', self.module.HTML)
+        self.assertIn('<th>Current configuration</th>', self.module.HTML)
+        self.assertIn('<th>Backup configuration</th>', self.module.HTML)
+        self.assertIn("rows.filter(row=>row.state!=='same').length", self.module.HTML)
+        self.assertNotIn('change(s) will be applied', self.module.HTML)
 
 
 if __name__ == '__main__':

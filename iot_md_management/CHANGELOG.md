@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.4.9
+
+- Replace the restore-preview count-only message with a structured comparison
+  of every selected configuration area: current value, backup value and
+  Changed, Unchanged or Missing state.
+- Derive the actual number of changes from the device's secret-safe preview
+  rows instead of labelling every reviewed row as a change.
+
 ## 2.4.8
 
 - Give manual backups the same selected-device, group and all-enabled target
