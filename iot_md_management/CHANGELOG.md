@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.5.1
+
+- Track multi-device deployments by the number of devices that have cleared
+  each milestone, keeping completed milestones as green ticks and showing an
+  explicit device count at the earliest incomplete step.
+- Preserve expanded device-progress, result, editor and recovery-point
+  disclosures during live refreshes.
+- Include the safe Portal, API and certificate-mode settings when adding the
+  standard profile baseline.
+
 ## 2.5.0
 
 - Default Verified releases to promoted versions, with an explicit All view for channel administration.

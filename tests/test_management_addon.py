@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.5.0', addon)
+        self.assertIn('version: 2.5.1', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -250,6 +250,26 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn("if(activePage==='deploy')refreshDeploymentProgress()", self.module.HTML)
         self.assertNotIn('<p>${esc(deployment.id)}', self.module.HTML)
         self.assertNotIn('${statusBadge(firstResult.status)}', self.module.HTML)
+
+    def test_live_fleet_progress_uses_per_device_completion_and_keeps_disclosures_open(self):
+        self.assertIn("thresholds=[1,2,3,4]", self.module.HTML)
+        self.assertIn("`${counts[index]}/${total}`", self.module.HTML)
+        self.assertIn("counts.findIndex(count=>count<total)", self.module.HTML)
+        self.assertIn("done?'✓'", self.module.HTML)
+        self.assertIn("step=complete===total?3", self.module.HTML)
+        self.assertIn('function replacePreservingDetails(element,html)', self.module.HTML)
+        self.assertIn('data-disclosure-key="deployment-progress-', self.module.HTML)
+        self.assertIn('data-disclosure-key="deployment-results-', self.module.HTML)
+        self.assertIn('data-disclosure-key="device-edit-', self.module.HTML)
+        self.assertIn('data-disclosure-key="backup-restore-', self.module.HTML)
+
+    def test_baseline_profile_includes_safe_advanced_settings(self):
+        for setting in (
+            'portal_transport', 'portal_port', 'portal_session_timeout_s',
+            'api_enabled', 'api_port', 'certificate_mode',
+            'certificate_method',
+        ):
+            self.assertIn("'" + setting + "'", self.module.HTML)
 
     def test_release_grid_is_fixed_and_profiles_are_grouped(self):
         self.assertIn(
