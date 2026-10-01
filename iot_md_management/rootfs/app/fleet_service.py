@@ -128,6 +128,44 @@ class FleetController:
         )
         return backup
 
+    def backup_targets(self, request):
+        """Resolve backup targets with the same scopes used by Deploy."""
+        devices = self.store.list_devices(public=False)
+        scope = str(request.get('target_scope') or '')
+        if not scope and request.get('device_id'):
+            scope = 'devices'
+            requested = {str(request.get('device_id'))}
+        else:
+            requested = {
+                str(value) for value in request.get('targets', ()) if str(value)
+            }
+        if scope == 'all':
+            targets = [item['id'] for item in devices if item.get('enabled')]
+        elif scope == 'cohort':
+            cohorts = {
+                str(value) for value in request.get('cohorts', ()) if str(value)
+            }
+            targets = [
+                item['id'] for item in devices
+                if item.get('enabled') and item.get('cohort') in cohorts
+            ]
+        elif scope == 'devices':
+            targets = [
+                item['id'] for item in devices
+                if item.get('enabled') and item['id'] in requested
+            ]
+            unavailable = requested - set(targets)
+            if unavailable:
+                raise ValueError(
+                    'backup contains an unavailable device: ' +
+                    sorted(unavailable)[0]
+                )
+        else:
+            raise ValueError('backup target scope is invalid')
+        if not targets:
+            raise ValueError('choose at least one available backup target')
+        return targets
+
     def preview_backup_restore(self, backup_id, target_id, sections=None):
         backup = self.store.get_backup(backup_id, include_payload=True)
         if not backup:

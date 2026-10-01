@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.4.7', addon)
+        self.assertIn('version: 2.4.8', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -1171,6 +1171,38 @@ class FleetAddonTests(unittest.TestCase):
             ['syslog_enabled'],
         )
 
+    def test_backup_targets_match_deploy_device_group_and_fleet_scopes(self):
+        from fleet_service import FleetController
+
+        store = self.module.FleetStore(Path(self.temp.name) / 'backup-targets.db')
+        self.addCleanup(store.close)
+        for identifier, cohort in (
+            ('canary-1', 'canary'), ('main-1', 'main'),
+            ('disabled-1', 'canary'),
+        ):
+            store.register({
+                'id': identifier, 'host': identifier + '.local',
+                'cohort': cohort, 'ca_path': '/ssl/ca.pem',
+                'cert_path': '/ssl/client.pem',
+                'key_path': '/ssl/client-key.pem',
+            })
+        store.update_device('disabled-1', {'enabled': False})
+        controller = FleetController(store, mock.Mock())
+
+        self.assertEqual(controller.backup_targets({
+            'target_scope': 'devices', 'targets': ['main-1'],
+        }), ['main-1'])
+        self.assertEqual(controller.backup_targets({
+            'target_scope': 'cohort', 'cohorts': ['canary'],
+        }), ['canary-1'])
+        self.assertEqual(controller.backup_targets({
+            'target_scope': 'all',
+        }), ['canary-1', 'main-1'])
+        with self.assertRaisesRegex(ValueError, 'unavailable'):
+            controller.backup_targets({
+                'target_scope': 'devices', 'targets': ['disabled-1'],
+            })
+
     def test_deployment_history_and_audit_are_durable(self):
         path = Path(self.temp.name) / 'deployment-history.db'
         store = self.module.FleetStore(path, now=lambda: 2000000000)
@@ -1309,13 +1341,13 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn("path.startswith('/api/jobs/')", Path(
             self.module.__file__
         ).read_text())
-        self.assertIn('async function waitForBackupJob', self.module.HTML)
+        self.assertIn('async function waitForBackupJobs', self.module.HTML)
         self.assertIn("job.status==='complete'", self.module.HTML)
         self.assertIn("job.status==='failed'", self.module.HTML)
         self.assertIn('Retrying automatically; no new backup request is required.', self.module.HTML)
         self.assertIn('needs the configuration:write scope', self.module.HTML)
         self.assertIn("if(activePage==='backups'){refreshBackups();setInterval", self.module.HTML)
-        self.assertIn('completed=backupState.pending&&backupState.items.some', self.module.HTML)
+        self.assertIn('backupState.pending.targets.every', self.module.HTML)
         self.assertIn("'active_jobs': STORE.active_jobs('backup')", Path(
             self.module.__file__
         ).read_text())
@@ -1324,6 +1356,11 @@ class FleetAddonTests(unittest.TestCase):
             'Encrypted backup queued. It will appear below when complete.',
             self.module.HTML,
         )
+        self.assertIn('name="backup_target_scope" value="devices"', self.module.HTML)
+        self.assertIn('name="backup_target_scope" value="cohort"', self.module.HTML)
+        self.assertIn('name="backup_target_scope" value="all"', self.module.HTML)
+        self.assertIn('signature!==backupState.renderSignature', self.module.HTML)
+        self.assertIn('refreshBackups(true)', self.module.HTML)
 
 
 if __name__ == '__main__':

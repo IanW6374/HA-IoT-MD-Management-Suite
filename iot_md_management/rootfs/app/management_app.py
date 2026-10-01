@@ -327,14 +327,15 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self._json(202, result)
             elif path == '/api/backups':
-                target = str(request.get('device_id') or '')
-                if not STORE.get_device(target):
-                    raise ValueError('device is not registered')
-                active = STORE.active_jobs('backup', target)
-                self._json(202, active[0] if active else STORE.enqueue_job(
-                    'backup', target, payload={'source': 'manual'},
-                    idempotency_key='backup:manual:' + target + ':' + str(int(time.time())),
-                ))
+                jobs = []
+                now = str(int(time.time()))
+                for target in CONTROLLER.backup_targets(request):
+                    active = STORE.active_jobs('backup', target)
+                    jobs.append(active[0] if active else STORE.enqueue_job(
+                        'backup', target, payload={'source': 'manual'},
+                        idempotency_key='backup:manual:' + target + ':' + now,
+                    ))
+                self._json(202, {'jobs': jobs, 'target_count': len(jobs)})
             elif path == '/api/backups/settings':
                 self._json(200, update_backup_settings(request))
             elif path.startswith('/api/backups/') and path.endswith('/preview'):

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.4.8
+
+- Give manual backups the same selected-device, group and all-enabled target
+  scopes as Deploy, queueing one encrypted backup job per resolved device.
+- Stop the periodic Recovery-points refresh from rebuilding an unchanged list
+  while a restore preview is open, preserving the disclosure and its result.
+
 ## 2.4.7
 
 - Render the encrypted marker as a compact inline badge immediately after the
