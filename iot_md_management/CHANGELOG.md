@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.4.6
+
+- Explain that an authorization failure is being retried automatically and
+  identify the required `configuration:write` device-client scope.
+- Refresh Recovery points periodically while the page is open so a completed
+  retry appears after returning from another tab without a manual refresh.
+- Reconcile a newly stored recovery point with its pending request, replacing
+  an earlier attempt error with the final successful outcome.
+- Resume tracking an active backup after a page reload, reuse the existing job
+  instead of creating a duplicate, and allow extra time for an administrator
+  to grant a missing `configuration:write` scope with ten-second retries.
+
 ## 2.4.5
 
 - Follow manual encrypted-backup jobs from queue through creation, transfer

@@ -849,6 +849,19 @@ class FleetRepository:
             ).fetchone()
         return self._job(row)
 
+    def active_jobs(self, kind, target=''):
+        query = (
+            "SELECT * FROM jobs WHERE kind=? AND status IN ('queued','running')"
+        )
+        values = [str(kind)]
+        if target:
+            query += ' AND target=?'
+            values.append(str(target))
+        query += ' ORDER BY created_at,id'
+        with self.lock:
+            rows = self.connection.execute(query, tuple(values)).fetchall()
+        return [self._job(row) for row in rows]
+
     def claim_job(self):
         now = self.now()
         with self.lock, self.connection:
@@ -876,7 +889,8 @@ class FleetRepository:
                 WHERE id=?
             ''', (self.now(), int(identifier)))
 
-    def fail_job(self, identifier, detail, maximum_attempts=5):
+    def fail_job(self, identifier, detail, maximum_attempts=5,
+                 maximum_delay=3600):
         with self.lock, self.connection:
             row = self.connection.execute(
                 'SELECT attempts FROM jobs WHERE id=?', (int(identifier),)
@@ -885,7 +899,7 @@ class FleetRepository:
                 return
             attempts = int(row['attempts'])
             status = 'failed' if attempts >= int(maximum_attempts) else 'queued'
-            delay = min(3600, 2 ** min(attempts, 10))
+            delay = min(int(maximum_delay), 2 ** min(attempts, 10))
             self.connection.execute('''
                 UPDATE jobs SET status=?,not_before=?,updated_at=?,last_error=?
                 WHERE id=?

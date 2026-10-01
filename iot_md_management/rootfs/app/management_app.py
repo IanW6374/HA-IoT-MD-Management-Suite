@@ -256,6 +256,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {
                     'backups': STORE.list_backups(),
                     'settings': backup_settings(),
+                    'active_jobs': STORE.active_jobs('backup'),
                 })
             elif path.startswith('/api/jobs/'):
                 identifier = path[len('/api/jobs/'):]
@@ -329,9 +330,9 @@ class Handler(BaseHTTPRequestHandler):
                 target = str(request.get('device_id') or '')
                 if not STORE.get_device(target):
                     raise ValueError('device is not registered')
-                self._json(202, STORE.enqueue_job(
-                    'backup', target,
-                    payload={'source': 'manual'},
+                active = STORE.active_jobs('backup', target)
+                self._json(202, active[0] if active else STORE.enqueue_job(
+                    'backup', target, payload={'source': 'manual'},
                     idempotency_key='backup:manual:' + target + ':' + str(int(time.time())),
                 ))
             elif path == '/api/backups/settings':
@@ -496,7 +497,14 @@ def job_loop():
             else:
                 raise ValueError('unsupported fleet job: ' + str(job['kind']))
         except Exception as exc:
-            STORE.fail_job(job['id'], exc)
+            permission_wait = (
+                job['kind'] == 'backup' and
+                'configuration:write' in str(exc)
+            )
+            STORE.fail_job(
+                job['id'], exc, maximum_attempts=20 if permission_wait else 5,
+                maximum_delay=10 if permission_wait else 3600,
+            )
         else:
             STORE.complete_job(job['id'])
 

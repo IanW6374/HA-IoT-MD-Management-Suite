@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.4.5', addon)
+        self.assertIn('version: 2.4.6', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -1286,6 +1286,7 @@ class FleetAddonTests(unittest.TestCase):
             'poll', 'device-1', idempotency_key='poll-device-1-slot-1'
         )
         self.assertEqual(first['id'], duplicate['id'])
+        self.assertEqual(store.active_jobs('poll', 'device-1')[0]['id'], first['id'])
         self.assertEqual(store.get_job(first['id'])['status'], 'queued')
         claimed = store.claim_job()
         self.assertEqual(claimed['status'], 'running')
@@ -1303,6 +1304,14 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('async function waitForBackupJob', self.module.HTML)
         self.assertIn("job.status==='complete'", self.module.HTML)
         self.assertIn("job.status==='failed'", self.module.HTML)
+        self.assertIn('Retrying automatically; no new backup request is required.', self.module.HTML)
+        self.assertIn('needs the configuration:write scope', self.module.HTML)
+        self.assertIn("if(activePage==='backups'){refreshBackups();setInterval", self.module.HTML)
+        self.assertIn('completed=backupState.pending&&backupState.items.some', self.module.HTML)
+        self.assertIn("'active_jobs': STORE.active_jobs('backup')", Path(
+            self.module.__file__
+        ).read_text())
+        self.assertIn('data.active_jobs?.length', self.module.HTML)
         self.assertNotIn(
             'Encrypted backup queued. It will appear below when complete.',
             self.module.HTML,
