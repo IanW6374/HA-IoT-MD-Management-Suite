@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.7.1', addon)
+        self.assertIn('version: 2.7.2', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -256,7 +256,11 @@ class FleetAddonTests(unittest.TestCase):
         self.assertNotIn('${statusBadge(firstResult.status)}', self.module.HTML)
 
     def test_live_fleet_progress_uses_per_device_completion_and_keeps_disclosures_open(self):
-        self.assertIn("thresholds=[1,2,3,4]", self.module.HTML)
+        self.assertIn("thresholds=[0,2,3,4]", self.module.HTML)
+        self.assertIn(
+            'Math.max(Number(value.milestone_rank)||0,ranks[value.status]??0)',
+            self.module.HTML,
+        )
         self.assertIn('function milestoneFlow(labels,counts,total,failed=false)', self.module.HTML)
         self.assertIn("`${count}/${total}`", self.module.HTML)
         self.assertIn('milestone_rank', self.module.HTML)
@@ -322,7 +326,10 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn("if(activePage==='profiles')", self.module.HTML)
 
     def test_devices_are_editable_and_profiles_are_first_class(self):
-        self.assertIn('Edit device', self.module.HTML)
+        self.assertIn('Device settings', self.module.HTML)
+        self.assertIn('Automated backups', self.module.HTML)
+        self.assertIn('Recovery points', self.module.HTML)
+        self.assertIn('class="device-section"', self.module.HTML)
         self.assertIn("method:'PATCH'", self.module.HTML)
         self.assertIn('data-page-link="profiles"', self.module.HTML)
         self.assertIn('<h1>Profiles</h1>', self.module.HTML)
@@ -338,6 +345,25 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('/api/v2/configuration/profile', Path(
             self.module.__file__
         ).with_name('fleet_service.py').read_text())
+
+    def test_guided_actions_start_unselected_and_unlock_progressively(self):
+        self.assertNotIn(
+            'name="action_mode" value="deploy" checked', self.module.HTML
+        )
+        self.assertNotIn(
+            'name="target_scope" value="devices" checked', self.module.HTML
+        )
+        self.assertNotIn(
+            'name="backup_target_scope" value="devices" checked',
+            self.module.HTML,
+        )
+        self.assertNotIn(
+            'name="activation" value="schedule" checked', self.module.HTML
+        )
+        self.assertIn('Choose an action to begin.', self.module.HTML)
+        self.assertIn("requested=updateUrl?checked", self.module.HTML)
+        self.assertIn("deploySelected=document.querySelector", self.module.HTML)
+        self.assertIn("syncBackupSteps()", self.module.HTML)
 
     def test_equal_maintenance_times_mean_all_day(self):
         from fleet_service import maintenance_window
@@ -1348,6 +1374,31 @@ class FleetAddonTests(unittest.TestCase):
         result = store.get_deployment(deployment['id'])['results']['device-1']
         self.assertEqual(result['status'], 'checking')
         self.assertEqual(result['milestone_rank'], 3)
+
+    def test_install_now_connection_loss_is_shown_as_device_restart(self):
+        from fleet_service import FleetController
+
+        store = self.module.FleetStore(Path(self.temp.name) / 'restart.db')
+        self.addCleanup(store.close)
+        deployment = store.create_deployment({
+            'activation': 'now',
+            'update': {
+                'release_sequence': 2801, 'release_type': 'application',
+                'version': '3.0.0-alpha.94', 'channel': 'alpha',
+            },
+        }, ['device-1'])
+        store.set_deployment_target(
+            deployment['id'], 'device-1', 'staging',
+            'Downloading and verifying update',
+        )
+        controller = FleetController(store, mock.Mock())
+
+        controller._mark_immediate_install_restart('device-1')
+
+        result = store.get_deployment(deployment['id'])['results']['device-1']
+        self.assertEqual(result['status'], 'installing')
+        self.assertEqual(result['milestone_rank'], 3)
+        self.assertIn('waiting to confirm', result['detail'])
 
     def test_install_now_is_recorded_as_all_day_admin_override(self):
         from fleet_service import FleetController

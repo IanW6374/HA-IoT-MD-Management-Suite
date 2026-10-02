@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.7.2
+
+- Start the Actions workspace without an implicit action, target scope or
+  activation choice; later sections remain visibly locked until their
+  prerequisite selection is complete.
+- Fix Back up and Restore choices being immediately reset to Deploy by stale
+  URL state.
+- Count accepted, staged and activating devices against the correct graphical
+  milestone, including records created by earlier Management versions.
+- Recognize the temporary disconnect caused by an immediate installation as a
+  restart awaiting version confirmation instead of leaving it at Staging.
+- Divide each device card into distinct Device settings, Automated backups and
+  Recovery points sections for clearer expanded views.
+
 ## 2.7.1
 
 - Match Home Assistant's compact 14 px Roboto type scale, 32 px maximum page

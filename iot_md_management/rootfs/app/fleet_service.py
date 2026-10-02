@@ -240,6 +240,7 @@ class FleetController:
             )
         except Exception as exc:
             self.store.set_device_error(identifier, device_connection_error(exc))
+            self._mark_immediate_install_restart(identifier)
             return self.store.get_device(identifier)
         self.store.record_poll(identifier, inventory, health, events)
         record = self.store.get_device(identifier)
@@ -259,6 +260,25 @@ class FleetController:
             return firmware >= sequence
         return release_type == 'universal' and application >= sequence and firmware >= sequence
 
+    def _mark_immediate_install_restart(self, identifier):
+        """Keep fast install-now reboots from looking stuck in staging."""
+        if not hasattr(self.store, 'list_deployments'):
+            return
+        for deployment in self.store.list_deployments():
+            if (
+                deployment.get('activation') != 'now' or
+                identifier not in deployment.get('targets', ())
+            ):
+                continue
+            current = (deployment.get('results', {}).get(identifier, {}) or {}).get(
+                'status', ''
+            )
+            if current in ('checking', 'staging', 'scheduled', 'installing'):
+                self.store.set_deployment_target(
+                    deployment['id'], identifier, 'installing',
+                    'Device is restarting; waiting to confirm the installed version'
+                )
+
     def _reconcile_deployments(self, identifier, record):
         if not hasattr(self.store, 'list_deployments'):
             return
@@ -267,7 +287,9 @@ class FleetController:
             if identifier not in deployment['targets']:
                 continue
             current = deployment['results'].get(identifier, {}).get('status', '')
-            if current in ('complete', 'failed', 'staged'):
+            if current in ('complete', 'failed') or (
+                current == 'staged' and deployment.get('activation') == 'stage'
+            ):
                 continue
             update = deployment.get('update') or {}
             if not update:
