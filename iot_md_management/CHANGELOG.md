@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.6.1
+
+- Keep the activation section locked when a selected profile has no profile
+  items selected, including after using Clear in the profile-item picker.
+
 ## 2.6.0
 
 - Keep deployment progress monotonic per device and show an independent device
