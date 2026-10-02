@@ -491,16 +491,9 @@ class FleetController:
                     'release_type': update['release_type'],
                 } for action in actions],
             })
-            status = {
-                'stage': 'staging', 'schedule': 'scheduled', 'now': 'installing'
-            }[activation]
-            detail = {
-                'stage': 'Staging update',
-                'schedule': 'Staging now; activation uses ' + window['label'],
-                'now': 'Administrator override accepted; installing now',
-            }[activation]
             return self.store.set_deployment_target(
-                deployment_id, identifier, status, detail
+                deployment_id, identifier, 'checking',
+                'Deployment accepted; checking update compatibility'
             )
         except Exception as exc:
             self.store.set_deployment_target(

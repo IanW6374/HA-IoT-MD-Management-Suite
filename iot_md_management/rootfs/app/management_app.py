@@ -153,7 +153,7 @@ def backup_settings():
     return defaults
 
 
-def update_backup_settings(request):
+def _normalized_backup_settings(request):
     value = {
         'enabled': bool(request.get('enabled', False)),
         'cadence': str(request.get('cadence') or 'daily'),
@@ -172,9 +172,108 @@ def update_backup_settings(request):
         raise ValueError('backup weekday is invalid')
     if not 1 <= value['retention'] <= 365:
         raise ValueError('backup retention must be between 1 and 365')
+    return value
+
+
+def update_backup_settings(request):
+    value = _normalized_backup_settings(request)
     STORE.set_metadata('backup_settings', json.dumps(value, separators=(',', ':')))
     STORE.record_audit('backup.schedule', 'complete', '', '', value)
     return value
+
+
+def device_backup_settings(identifier):
+    try:
+        settings = json.loads(STORE.metadata('backup_device_settings', '{}'))
+    except Exception:
+        settings = {}
+    value = settings.get(str(identifier)) if isinstance(settings, dict) else None
+    return _normalized_backup_settings(value or backup_settings())
+
+
+def update_device_backup_settings(identifier, request):
+    if not STORE.get_device(identifier):
+        raise ValueError('device is not registered')
+    value = _normalized_backup_settings(request)
+    try:
+        settings = json.loads(STORE.metadata('backup_device_settings', '{}'))
+    except Exception:
+        settings = {}
+    if not isinstance(settings, dict):
+        settings = {}
+    settings[str(identifier)] = value
+    STORE.set_metadata(
+        'backup_device_settings', json.dumps(settings, separators=(',', ':'))
+    )
+    STORE.record_audit('backup.schedule', 'complete', identifier, '', value)
+    return value
+
+
+def attention_items():
+    items = []
+    for device in STORE.list_devices():
+        detail = str(device.get('last_error') or '')
+        if detail:
+            items.append({
+                'key': 'device:' + device['id'], 'kind': 'device',
+                'title': device.get('name') or device['id'],
+                'detail': detail, 'status': 'failed',
+                'time': int(device.get('last_seen') or 0),
+            })
+    for deployment in STORE.list_deployments(200):
+        if deployment.get('status') not in ('failed', 'partial'):
+            continue
+        failures = [
+            value.get('detail', '') for value in deployment.get('results', {}).values()
+            if value.get('status') == 'failed'
+        ]
+        items.append({
+            'key': 'deployment:' + deployment['id'], 'kind': 'deployment',
+            'title': deployment['id'],
+            'detail': next((value for value in failures if value), 'Deployment failed'),
+            'status': deployment['status'],
+            'time': int(deployment.get('updated_at') or 0),
+        })
+    try:
+        acknowledged = json.loads(STORE.metadata('attention_acknowledged', '{}'))
+    except Exception:
+        acknowledged = {}
+    if not isinstance(acknowledged, dict):
+        acknowledged = {}
+    live_keys = set()
+    for item in items:
+        fingerprint = hashlib.sha256(json.dumps({
+            'key': item['key'], 'status': item['status'], 'detail': item['detail'],
+        }, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        item['fingerprint'] = fingerprint
+        item['acknowledged'] = acknowledged.get(item['key']) == fingerprint
+        live_keys.add(item['key'])
+    pruned = {key: value for key, value in acknowledged.items() if key in live_keys}
+    if pruned != acknowledged:
+        STORE.set_metadata('attention_acknowledged', json.dumps(pruned))
+    return items
+
+
+def acknowledge_attention(request):
+    items = attention_items()
+    requested = request.get('keys')
+    keys = set(str(value) for value in requested) if isinstance(requested, list) else {
+        item['key'] for item in items
+    }
+    acknowledged = {
+        item['key']: item['fingerprint'] for item in items if item['key'] in keys
+    }
+    try:
+        existing = json.loads(STORE.metadata('attention_acknowledged', '{}'))
+    except Exception:
+        existing = {}
+    existing = existing if isinstance(existing, dict) else {}
+    existing.update(acknowledged)
+    STORE.set_metadata('attention_acknowledged', json.dumps(existing))
+    STORE.record_audit(
+        'attention.acknowledged', 'complete', '', '', {'keys': sorted(acknowledged)}
+    )
+    return {'acknowledged': sorted(acknowledged)}
 
 
 def render_portal(page):
@@ -253,10 +352,21 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/profiles':
                 self._json(200, {'profiles': STORE.list_profiles()})
             elif path == '/api/backups':
+                devices = STORE.list_devices()
                 self._json(200, {
                     'backups': STORE.list_backups(),
                     'settings': backup_settings(),
+                    'device_settings': {
+                        item['id']: device_backup_settings(item['id'])
+                        for item in devices
+                    },
                     'active_jobs': STORE.active_jobs('backup'),
+                })
+            elif path == '/api/attention':
+                items = attention_items()
+                self._json(200, {
+                    'items': items,
+                    'count': sum(not item['acknowledged'] for item in items),
                 })
             elif path.startswith('/api/jobs/'):
                 identifier = path[len('/api/jobs/'):]
@@ -332,12 +442,22 @@ class Handler(BaseHTTPRequestHandler):
                 for target in CONTROLLER.backup_targets(request):
                     active = STORE.active_jobs('backup', target)
                     jobs.append(active[0] if active else STORE.enqueue_job(
-                        'backup', target, payload={'source': 'manual'},
+                        'backup', target, payload={
+                            'source': 'manual',
+                            'retention': device_backup_settings(target)['retention'],
+                        },
                         idempotency_key='backup:manual:' + target + ':' + now,
                     ))
                 self._json(202, {'jobs': jobs, 'target_count': len(jobs)})
             elif path == '/api/backups/settings':
                 self._json(200, update_backup_settings(request))
+            elif path.startswith('/api/backups/settings/'):
+                identifier = unquote(path[len('/api/backups/settings/'):])
+                if not identifier or '/' in identifier:
+                    raise ValueError('device id is invalid')
+                self._json(200, update_device_backup_settings(identifier, request))
+            elif path == '/api/attention/acknowledge':
+                self._json(200, acknowledge_attention(request))
             elif path.startswith('/api/backups/') and path.endswith('/preview'):
                 identifier = path[len('/api/backups/'):-len('/preview')]
                 self._json(200, CONTROLLER.preview_backup_restore(
@@ -490,10 +610,10 @@ def job_loop():
             elif job['kind'] == 'rollout':
                 CONTROLLER.dispatch_rollout(job['target'])
             elif job['kind'] == 'backup':
-                settings = backup_settings()
+                settings = device_backup_settings(job['target'])
                 CONTROLLER.create_backup(
                     job['target'], job['payload'].get('source', 'scheduled'),
-                    settings['retention']
+                    int(job['payload'].get('retention', settings['retention']))
                 )
             else:
                 raise ValueError('unsupported fleet job: ' + str(job['kind']))
@@ -519,23 +639,23 @@ RELEASE_SYNC_STATE = {
 
 def backup_schedule_loop():
     while True:
-        settings = backup_settings()
         now = time.localtime()
-        hour, minute = (int(part) for part in settings['time'].split(':'))
         today = '%04d-%03d' % (now.tm_year, now.tm_yday)
-        due = now.tm_hour * 60 + now.tm_min >= hour * 60 + minute
-        if settings['cadence'] == 'weekly':
-            due = due and now.tm_wday == settings['weekday']
-        if (
-            settings['enabled'] and due and
-            STORE.metadata('backup_last_schedule_date', '') != today
-        ):
-            for identifier in STORE.device_ids(enabled_only=True):
+        for identifier in STORE.device_ids(enabled_only=True):
+            settings = device_backup_settings(identifier)
+            hour, minute = (int(part) for part in settings['time'].split(':'))
+            due = now.tm_hour * 60 + now.tm_min >= hour * 60 + minute
+            if settings['cadence'] == 'weekly':
+                due = due and now.tm_wday == settings['weekday']
+            marker = 'backup_last_schedule_date:' + identifier
+            if settings['enabled'] and due and STORE.metadata(marker, '') != today:
                 STORE.enqueue_job(
-                    'backup', identifier, payload={'source': 'scheduled'},
+                    'backup', identifier, payload={
+                        'source': 'scheduled', 'retention': settings['retention'],
+                    },
                     idempotency_key='backup:scheduled:' + identifier + ':' + today,
                 )
-            STORE.set_metadata('backup_last_schedule_date', today)
+                STORE.set_metadata(marker, today)
         time.sleep(30)
 
 

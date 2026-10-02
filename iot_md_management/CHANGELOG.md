@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.6.0
+
+- Keep deployment progress monotonic per device and show an independent device
+  count and percentage ring at every milestone, so devices may occupy different
+  stages without making aggregate progress move backwards.
+- Apply the same multi-target progress treatment to encrypted backup jobs and
+  surface active deployments and backups on the Overview page while they run.
+- Turn Attention required into a filtered, actionable issue list with individual
+  or bulk acknowledgement and automatic removal when a condition resolves.
+- Move automated backup schedules to each device, expose them under Edit device,
+  and show that device's latest valid recovery points alongside its schedule.
+- Rename the recovery page to Device Backups, retain manual and automated work in
+  one live status area, and keep completed recovery points in Backup history.
+- Guide multi-step deployments by muting and disabling later sections until the
+  current selection is complete, and standardize spacing before device enrolment.
+
 ## 2.5.1
 
 - Track multi-device deployments by the number of devices that have cleared

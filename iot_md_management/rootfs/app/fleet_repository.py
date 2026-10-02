@@ -545,7 +545,7 @@ class FleetRepository:
         results = {
             target: {
                 'status': 'queued', 'detail': 'Waiting to start',
-                'updated_at': self.now(),
+                'updated_at': self.now(), 'milestone_rank': 0,
             } for target in targets
         }
         now = self.now()
@@ -591,16 +591,28 @@ class FleetRepository:
 
     def set_deployment_target(self, identifier, device_id, status, detail=''):
         terminal = {'complete', 'failed', 'staged'}
+        milestone_ranks = {
+            'queued': 0, 'active': 0, 'running': 0,
+            'checking': 1, 'staging': 1, 'staged': 2,
+            'scheduled': 2, 'installing': 3, 'complete': 4,
+        }
         with self.lock, self.connection:
             deployment = self.get_deployment(identifier)
             if not deployment:
                 raise ValueError('deployment does not exist')
             if device_id not in deployment['targets']:
                 raise ValueError('device is not part of this deployment')
-            previous = deployment['results'].get(device_id, {}).get('status', '')
+            previous_result = deployment['results'].get(device_id, {})
+            previous = previous_result.get('status', '')
+            previous_rank = int(previous_result.get(
+                'milestone_rank', milestone_ranks.get(previous, 0)
+            ) or 0)
+            milestone_rank = max(
+                previous_rank, milestone_ranks.get(str(status), previous_rank)
+            )
             deployment['results'][device_id] = {
                 'status': str(status)[:32], 'detail': str(detail)[:256],
-                'updated_at': self.now(),
+                'updated_at': self.now(), 'milestone_rank': milestone_rank,
             }
             states = [
                 value.get('status', 'queued')

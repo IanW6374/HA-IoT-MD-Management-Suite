@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.5.1', addon)
+        self.assertIn('version: 2.6.0', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -229,10 +229,11 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('<a class="metric" href="devices">', self.module.HTML)
         self.assertIn('<a class="metric" href="releases">', self.module.HTML)
         self.assertIn(
-            '<a class="metric" href="deploy#active-deployments">',
+            '<a class="metric" href="#overview-active-operations">',
             self.module.HTML,
         )
-        self.assertIn('<a class="metric" href="activity">', self.module.HTML)
+        self.assertIn('<a class="metric" href="activity?filter=attention">', self.module.HTML)
+        self.assertIn('id="overview-active-operations"', self.module.HTML)
         self.assertNotIn('id="overview-deployments"', self.module.HTML)
         self.assertNotIn('id="overview-activity"', self.module.HTML)
 
@@ -253,10 +254,11 @@ class FleetAddonTests(unittest.TestCase):
 
     def test_live_fleet_progress_uses_per_device_completion_and_keeps_disclosures_open(self):
         self.assertIn("thresholds=[1,2,3,4]", self.module.HTML)
-        self.assertIn("`${counts[index]}/${total}`", self.module.HTML)
-        self.assertIn("counts.findIndex(count=>count<total)", self.module.HTML)
+        self.assertIn('function milestoneFlow(labels,counts,total,failed=false)', self.module.HTML)
+        self.assertIn("`${count}/${total}`", self.module.HTML)
+        self.assertIn('milestone_rank', self.module.HTML)
         self.assertIn("done?'✓'", self.module.HTML)
-        self.assertIn("step=complete===total?3", self.module.HTML)
+        self.assertIn("milestoneFlow(['Queued','Backing up','Stored']", self.module.HTML)
         self.assertIn('function replacePreservingDetails(element,html)', self.module.HTML)
         self.assertIn('data-disclosure-key="deployment-progress-', self.module.HTML)
         self.assertIn('data-disclosure-key="deployment-results-', self.module.HTML)
@@ -1275,6 +1277,7 @@ class FleetAddonTests(unittest.TestCase):
         saved = restored.get_deployment(deployment['id'])
         self.assertEqual(saved['update']['release_sequence'], 2785)
         self.assertEqual(saved['results']['device-1']['status'], 'scheduled')
+        self.assertEqual(saved['results']['device-1']['milestone_rank'], 2)
         self.assertEqual(saved['status'], 'active')
         actions = [item['action'] for item in restored.list_audit()]
         self.assertIn('deployment.created', actions)
@@ -1322,8 +1325,25 @@ class FleetAddonTests(unittest.TestCase):
             ['check-update', 'download-update', 'activate-update'],
         )
         saved = store.get_deployment(deployment['id'])
-        self.assertEqual(saved['results']['device-1']['status'], 'scheduled')
+        self.assertEqual(saved['results']['device-1']['status'], 'checking')
+        self.assertEqual(saved['results']['device-1']['milestone_rank'], 1)
         self.assertFalse(saved['administrator_override'])
+
+    def test_deployment_milestone_rank_never_moves_backwards(self):
+        store = self.module.FleetStore(Path(self.temp.name) / 'monotonic.db')
+        self.addCleanup(store.close)
+        deployment = store.create_deployment({
+            'activation': 'now',
+            'update': {
+                'release_sequence': 2800, 'release_type': 'application',
+                'version': '3.0.0-alpha.93', 'channel': 'alpha',
+            },
+        }, ['device-1'])
+        store.set_deployment_target(deployment['id'], 'device-1', 'installing')
+        store.set_deployment_target(deployment['id'], 'device-1', 'checking')
+        result = store.get_deployment(deployment['id'])['results']['device-1']
+        self.assertEqual(result['status'], 'checking')
+        self.assertEqual(result['milestone_rank'], 3)
 
     def test_install_now_is_recorded_as_all_day_admin_override(self):
         from fleet_service import FleetController
@@ -1408,7 +1428,7 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('<th>Backup configuration</th>', self.module.HTML)
         self.assertIn("rows.filter(row=>row.state!=='same').length", self.module.HTML)
         self.assertIn('function renderBackupProgress(jobs=[]){', self.module.HTML)
-        self.assertIn("operationFlow(['Queued','Encrypt & transfer','Stored']", self.module.HTML)
+        self.assertIn("milestoneFlow(['Queued','Backing up','Stored']", self.module.HTML)
         self.assertIn('renderBackupProgress(jobs)', self.module.HTML)
         self.assertNotIn('change(s) will be applied', self.module.HTML)
 
