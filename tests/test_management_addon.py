@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.6.1', addon)
+        self.assertIn('version: 2.7.0', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -210,8 +210,11 @@ class FleetAddonTests(unittest.TestCase):
         self.assertNotIn('name="duration_minutes"', self.module.HTML)
 
     def test_unified_deployment_workflow_hides_policy_implementation_details(self):
-        self.assertIn('data-page-link="deploy"', self.module.HTML)
-        self.assertIn('Deploy updates and profiles', self.module.HTML)
+        self.assertIn('data-page-link="actions"', self.module.HTML)
+        self.assertIn('<h1>Actions</h1>', self.module.HTML)
+        self.assertIn('name="action_mode" value="deploy"', self.module.HTML)
+        self.assertIn('name="action_mode" value="backup"', self.module.HTML)
+        self.assertIn('name="action_mode" value="restore"', self.module.HTML)
         self.assertIn('Selected devices', self.module.HTML)
         self.assertIn('Groups', self.module.HTML)
         self.assertIn('All enabled', self.module.HTML)
@@ -248,7 +251,7 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('device results</summary>', self.module.HTML)
         self.assertIn('function conciseDeploymentDetail(detail,version)', self.module.HTML)
         self.assertIn('function refreshDeploymentProgress()', self.module.HTML)
-        self.assertIn("if(activePage==='deploy')refreshDeploymentProgress()", self.module.HTML)
+        self.assertIn("if(activePage==='actions')refreshDeploymentProgress()", self.module.HTML)
         self.assertNotIn('<p>${esc(deployment.id)}', self.module.HTML)
         self.assertNotIn('${statusBadge(firstResult.status)}', self.module.HTML)
 
@@ -259,6 +262,7 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('milestone_rank', self.module.HTML)
         self.assertIn("done?'✓'", self.module.HTML)
         self.assertIn("milestoneFlow(['Queued','Backing up','Stored']", self.module.HTML)
+        self.assertNotIn('class="flow-count"', self.module.HTML)
         self.assertIn('function replacePreservingDetails(element,html)', self.module.HTML)
         self.assertIn('data-disclosure-key="deployment-progress-', self.module.HTML)
         self.assertIn('data-disclosure-key="deployment-results-', self.module.HTML)
@@ -464,7 +468,7 @@ class FleetAddonTests(unittest.TestCase):
     def test_portal_sections_have_distinct_routes_and_active_tabs(self):
         self.assertEqual(
             set(self.module.PORTAL_PAGES),
-            {'/', '/deploy', '/deployments', '/releases', '/devices',
+            {'/', '/actions', '/deploy', '/deployments', '/releases', '/devices',
              '/profiles', '/activity', '/backups', '/settings'},
         )
         settings = self.module.render_portal('settings').decode()
@@ -476,14 +480,14 @@ class FleetAddonTests(unittest.TestCase):
 
     def test_portal_navigation_does_not_depend_on_javascript_for_section_visibility(self):
         self.assertIn('[data-page-section]{display:none}', self.module.HTML)
-        for page in ('overview', 'deploy', 'releases', 'devices', 'profiles',
+        for page in ('overview', 'actions', 'releases', 'devices', 'profiles',
                      'activity', 'settings'):
             self.assertIn(
                 f'body[data-page="{page}"] [data-page-section="{page}"]',
                 self.module.HTML,
             )
         deployments = self.module.render_portal('deployments').decode()
-        self.assertIn('<body data-page="deploy">', deployments)
+        self.assertIn('<body data-page="actions">', deployments)
         self.assertIn('id="deployment-history"', deployments)
         self.assertIn('id="activity-timeline"', deployments)
 
@@ -1408,7 +1412,7 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn("job.status==='failed'", self.module.HTML)
         self.assertIn('Retrying automatically; no new backup request is required.', self.module.HTML)
         self.assertIn('needs the configuration:write scope', self.module.HTML)
-        self.assertIn("if(activePage==='backups'){refreshBackups();setInterval", self.module.HTML)
+        self.assertIn("if(activePage==='actions'){refreshBackups();setInterval", self.module.HTML)
         self.assertIn('backupState.pending.targets.every', self.module.HTML)
         self.assertIn("'active_jobs': STORE.active_jobs('backup')", Path(
             self.module.__file__
@@ -1431,6 +1435,16 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn("milestoneFlow(['Queued','Backing up','Stored']", self.module.HTML)
         self.assertIn('renderBackupProgress(jobs)', self.module.HTML)
         self.assertNotIn('change(s) will be applied', self.module.HTML)
+
+    def test_device_backup_shortcut_opens_restore_action(self):
+        self.assertIn(
+            'href="actions?mode=restore&backup=${item.id}#backup-${item.id}"',
+            self.module.HTML,
+        )
+        self.assertIn('id="backup-${item.id}"', self.module.HTML)
+        self.assertIn("selected.querySelector('details').open=true", self.module.HTML)
+        self.assertIn('function syncActionMode(updateUrl=false)', self.module.HTML)
+        self.assertNotIn('data-page-link="backups"', self.module.HTML)
 
 
 if __name__ == '__main__':

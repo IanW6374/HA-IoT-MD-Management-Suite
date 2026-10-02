@@ -134,8 +134,9 @@ CONTROLLER = FleetController(
 
 PORTAL_PAGES = {
     '/': 'overview', '/releases': 'releases', '/devices': 'devices',
-    '/deploy': 'deploy', '/deployments': 'deploy', '/profiles': 'profiles',
-    '/activity': 'activity', '/backups': 'backups', '/settings': 'settings',
+    '/actions': 'actions', '/deploy': 'actions', '/deployments': 'actions',
+    '/profiles': 'profiles', '/activity': 'activity', '/backups': 'actions',
+    '/settings': 'settings',
 }
 
 
@@ -277,9 +278,8 @@ def acknowledge_attention(request):
 
 
 def render_portal(page):
-    # Keep the former route as a direct-call alias as well as an HTTP alias.
-    if page == 'deployments':
-        page = 'deploy'
+    if page in ('deploy', 'deployments', 'backups'):
+        page = 'actions'
     values = {
         '__PAGE__': page,
         '__GITHUB_REPOSITORY__': OPTIONS.get(

@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.7.0
+
+- Consolidate Deploy and Backups into one Actions workspace with Deploy, Back
+  up and Restore modes while retaining direct route aliases.
+- Add Restore shortcuts to each device's valid backup list; the selected
+  recovery point opens directly with its preview and restore controls expanded.
+- Remove the duplicate count and percentage caption below graphical milestones;
+  the ring retains the count and its accessible tooltip retains the percentage.
+- Align the portal type scale, heading sizes, panel density and page spacing
+  more closely with Home Assistant and the other IoT add-ons.
+
 ## 2.6.1
 
 - Keep the activation section locked when a selected profile has no profile
