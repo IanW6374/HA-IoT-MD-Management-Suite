@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.7.1
+
+- Match Home Assistant's compact 14 px Roboto type scale, 32 px maximum page
+  heading, 1,200 px content width, tighter controls and lower-radius panels.
+- Keep the consolidated Actions and device backup restore workflow introduced
+  in 2.7.0.
+
 ## 2.7.0
 
 - Consolidate Deploy and Backups into one Actions workspace with Deploy, Back
