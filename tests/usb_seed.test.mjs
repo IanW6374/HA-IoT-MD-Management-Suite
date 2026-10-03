@@ -58,11 +58,27 @@ function board(security = blank(), digest = 'correct') {
 }
 test('factory validation rejects update files and wrong chips', () => {
   const bytes = new Uint8Array(0x20000);
-  bytes[0]=0xe9; bytes[12]=9; bytes[0x8000]=0xaa; bytes[0x8001]=0x50;
+  bytes[0]=0xe9; bytes[12]=9; bytes[0x10000]=0xaa; bytes[0x10001]=0x50;
   validateFactoryImage(bytes, 'new.factory.bin');
   assert.throws(() => validateFactoryImage(bytes, 'new.iotuni'));
   bytes[12]=0;
   assert.throws(() => validateFactoryImage(bytes, 'new.factory.bin'));
+});
+test('secure factory layout uses 0x10000 even when 0x8000 contains signature data', () => {
+  const bytes = new Uint8Array(0x20000);
+  bytes[0]=0xe9; bytes[12]=9;
+  bytes.fill(0xff, 0x8000, 0x9000);
+  bytes[0x10000]=0xaa; bytes[0x10001]=0x50;
+  validateFactoryImage(bytes, 'new.factory.bin');
+});
+test('a default-offset or missing partition table is not an IoT-MD factory layout', () => {
+  const bytes = new Uint8Array(0x20000);
+  bytes[0]=0xe9; bytes[12]=9;
+  assert.throws(() => validateFactoryImage(bytes, 'new.factory.bin'), /partition table at 0x10000/);
+  bytes[0x8000]=0xaa; bytes[0x8001]=0x50;
+  assert.throws(() => validateFactoryImage(bytes, 'new.factory.bin'), /partition table at 0x10000/);
+  bytes[0x10000]=0xaa; bytes[0x10001]=0x51;
+  assert.throws(() => validateFactoryImage(bytes, 'new.factory.bin'), /partition table at 0x10000/);
 });
 test('secured or unreadable boards are refused before erase or flash', async () => {
   for (const change of [info=>info.flashCryptCnt=2, info=>info.keyPurposes[0]=9,

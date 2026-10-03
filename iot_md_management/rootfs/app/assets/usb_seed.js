@@ -32,7 +32,9 @@ export function validateFactoryImage(bytes, filename) {
   if (bytes.length < 0x20000 || bytes.length > 16 * 1024 * 1024) throw new Error('Factory image size is invalid.');
   if (bytes.length % 4) throw new Error('Factory image is not aligned correctly.');
   if (bytes[0] !== 0xe9 || (bytes[12] | bytes[13] << 8) !== 9) throw new Error('Factory image does not contain an ESP32-S3 bootloader.');
-  if (bytes[0x8000] !== 0xaa || bytes[0x8001] !== 0x50) throw new Error('Factory image is missing its partition table.');
+  // IoT-MD reserves space for the signed secure-boot bootloader; its board
+  // configuration places the partition table at 0x10000, not ESP-IDF's 0x8000 default.
+  if (bytes[0x10000] !== 0xaa || bytes[0x10001] !== 0x50) throw new Error('Factory image is missing its partition table at 0x10000.');
 }
 
 export function validateBlankBoard(security) {

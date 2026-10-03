@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.8.2
+
+- Correct browser USB factory-image validation to use IoT-MD's secure partition
+  table offset (`0x10000`), allowing the freshly built Alpha 96 factory image.
+- Add regression coverage for signed-bootloader layouts and rejection of
+  missing, damaged or default-offset partition tables.
+
 ## 2.8.1
 
 - Identify the browser and show unsupported-browser and HTTPS requirements
