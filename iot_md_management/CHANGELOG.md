@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.7.6
+
+- Hide empty deployment or backup categories while another type of action is
+  in flight, avoiding contradictory empty-state messages.
+- Show one shared empty state only when no fleet action is running.
+
 ## 2.7.5
 
 - Move **New** and **In-Flight** into a real submenu beneath the primary

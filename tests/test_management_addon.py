@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.7.5', addon)
+        self.assertIn('version: 2.7.6', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -249,6 +249,10 @@ class FleetAddonTests(unittest.TestCase):
     def test_deployment_history_keeps_progress_only_for_in_flight_work(self):
         self.assertIn('function activeDeploymentCard(deployment)', self.module.HTML)
         self.assertIn('${flowFor(deployment)}${deviceResults}', self.module.HTML)
+        self.assertIn('id="inflight-empty"', self.module.HTML)
+        self.assertIn("deploymentSection?.classList.toggle('hidden',!active.length)", self.module.HTML)
+        self.assertIn("emptySection?.classList.toggle('hidden',!!active.length||!!backupCount)", self.module.HTML)
+        self.assertNotIn('No deployments are currently in flight.', self.module.HTML)
         self.assertIn("const terminal=new Set(['complete','failed','partial','staged'])", self.module.HTML)
         self.assertIn('active.map(activeDeploymentCard)', self.module.HTML)
         self.assertIn('html:deploymentHistoryItem(item)', self.module.HTML)
