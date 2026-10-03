@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.7.4
+
+- Split Actions into focused **New** and **In-Flight** views and switch to
+  In-Flight automatically after a deployment or backup is accepted.
+- Move completed deployment and backup history into Activity, with filters and
+  expandable per-device results.
+- Allow encrypted recovery points to be previewed, restored or deleted directly
+  from Activity, including links from device recovery-point lists.
+
 ## 2.7.3
 
 - Place **Back up now** before **Current backup operations** so the selected
