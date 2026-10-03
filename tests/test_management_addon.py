@@ -223,7 +223,10 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('if(workflow)workflow.remove()', self.module.HTML)
         self.assertNotIn('aria-label="Deployment workflow"', self.module.HTML)
         self.assertIn('id="deployment-active"', self.module.HTML)
-        self.assertIn('Deployment history', self.module.HTML)
+        self.assertIn('data-action-view="new"', self.module.HTML)
+        self.assertIn('data-action-view="inflight"', self.module.HTML)
+        self.assertNotIn('id="deployment-history"', self.module.HTML)
+        self.assertIn('id="action-history"', self.module.HTML)
         self.assertNotIn('data-page-link="policy"', self.module.HTML)
         self.assertNotIn('data-page-link="rollouts"', self.module.HTML)
         self.assertIn("api('api/deployments'", self.module.HTML)
@@ -245,9 +248,9 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('${flowFor(deployment)}${deviceResults}', self.module.HTML)
         self.assertIn("const terminal=new Set(['complete','failed','partial','staged'])", self.module.HTML)
         self.assertIn('active.map(activeDeploymentCard)', self.module.HTML)
-        self.assertIn('history.map(deploymentHistoryItem)', self.module.HTML)
+        self.assertIn('html:deploymentHistoryItem(item)', self.module.HTML)
         self.assertIn('class="timeline"', self.module.HTML)
-        self.assertIn('deployment.targets.length>1', self.module.HTML)
+        self.assertIn('deployment.targets.length===1', self.module.HTML)
         self.assertIn('device results</summary>', self.module.HTML)
         self.assertIn('function conciseDeploymentDetail(detail,version)', self.module.HTML)
         self.assertIn('function refreshDeploymentProgress()', self.module.HTML)
@@ -518,7 +521,8 @@ class FleetAddonTests(unittest.TestCase):
             )
         deployments = self.module.render_portal('deployments').decode()
         self.assertIn('<body data-page="actions">', deployments)
-        self.assertIn('id="deployment-history"', deployments)
+        self.assertNotIn('id="deployment-history"', deployments)
+        self.assertIn('id="action-history"', deployments)
         self.assertIn('id="activity-timeline"', deployments)
 
     def test_github_synchronization_is_explicitly_enabled(self):
@@ -1525,11 +1529,11 @@ class FleetAddonTests(unittest.TestCase):
 
     def test_device_backup_shortcut_opens_restore_action(self):
         self.assertIn(
-            'href="actions?mode=restore&backup=${item.id}#backup-${item.id}"',
+            'href="activity?history=backups&backup=${item.id}#backup-${item.id}"',
             self.module.HTML,
         )
         self.assertIn('id="backup-${item.id}"', self.module.HTML)
-        self.assertIn("selected.querySelector('details').open=true", self.module.HTML)
+        self.assertIn("selected.querySelector('details')?.setAttribute('open','')", self.module.HTML)
         self.assertIn('function syncActionMode(updateUrl=false)', self.module.HTML)
         self.assertNotIn('data-page-link="backups"', self.module.HTML)
 
