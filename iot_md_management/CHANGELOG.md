@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.8.0
+
+- Add **Actions > New > Seed device** for a blank ESP32-S3 connected by USB to
+  the browser computer. Factory bytes and the setup credential stay local.
+- Inspect board security before writing, preserve signed image headers, verify
+  the written image, and start first boot only after successful verification.
+- Show live USB milestones in In-Flight and retain browser-reported results in
+  Activity. Lost browser connections are recorded as unknown outcomes.
+- Provide a separate USB workspace for embedded-page permission restrictions.
+  Use HTTPS and a browser supporting Web Serial, such as Chrome or Edge;
+  Safari currently does not support direct browser USB seeding.
+
+
 ## 2.7.6
 
 - Hide empty deployment or backup categories while another type of action is

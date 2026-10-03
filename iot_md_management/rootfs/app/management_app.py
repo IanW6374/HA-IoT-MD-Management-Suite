@@ -24,6 +24,7 @@ from configuration_profiles import normalize_profile
 from release_catalog import ArtifactVerifier, CatalogSigner, ReleaseCatalog
 from management_portal import HTML as MANAGEMENT_PORTAL_HTML
 from profile_secrets import ProfileSecretCipher
+from usb_seed import USBSeedManager
 
 
 DATA_DIRECTORY = Path(os.environ.get('IOT_MD_MANAGEMENT_DATA', '/data'))
@@ -112,6 +113,7 @@ STORE = FleetStore(
     secret_key_path=PROFILE_SECRET_KEY_PATH,
 )
 SIGNER = PolicySigner(SIGNING_KEY_PATH, PUBLIC_KEY_PATH)
+USB_SEED = USBSeedManager(STORE)
 CATALOG_SIGNER = CatalogSigner(SIGNING_KEY_PATH, PUBLIC_KEY_PATH)
 RELEASES = ReleaseCatalog(
     RELEASE_STATE_PATH, RELEASE_ROOT, ArtifactVerifier(TRUSTED_UPDATE_KEY_PATH),
@@ -332,7 +334,25 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path.rstrip('/') or '/'
         try:
-            if path in PORTAL_PAGES:
+            if path == '/api/seed-workbench':
+                body = render_portal('actions').replace(b'<head>', b'<head><base href="../">')
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Permissions-Policy', 'serial=(self)')
+                self.end_headers()
+                self.wfile.write(body)
+            elif path in ('/assets/usb_seed.js', '/assets/vendor/esptool-js-0.7.0.js',
+                          '/assets/vendor/spark-md5-3.0.2.js'):
+                body = (APP_DIRECTORY / path.lstrip('/')).read_bytes()
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/javascript; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.send_header('X-Content-Type-Options', 'nosniff')
+                self.end_headers()
+                self.wfile.write(body)
+            elif path in PORTAL_PAGES:
                 body = render_portal(PORTAL_PAGES[path])
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/html; charset=utf-8')
@@ -341,6 +361,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
             elif path == '/api/devices':
                 self._json(200, {'devices': STORE.list_devices()})
+            elif path == '/api/seed':
+                self._json(200, USB_SEED.snapshot())
             elif path == '/api/events':
                 self._json(200, {'events': STORE.list_events(500)})
             elif path == '/api/audit':
@@ -403,7 +425,11 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path.rstrip('/')
         try:
             request = self._body()
-            if path == '/api/devices':
+            if path == '/api/seed':
+                self._json(202, USB_SEED.start(request))
+            elif path.startswith('/api/seed/'):
+                self._json(200, USB_SEED.update(path[len('/api/seed/'):], request))
+            elif path == '/api/devices':
                 result = STORE.register(request)
                 STORE.record_audit(
                     'device.registered', 'complete', result['id'], result['host'],

@@ -366,3 +366,70 @@ HTML = HTML.replace(
     '@media(max-width:700px){.release-tools{align-items:stretch;flex-direction:column}.view-switch{display:grid;grid-template-columns:1fr 1fr}.topbar nav{overflow:visible;flex-wrap:wrap}.nav-submenu{left:auto;right:0}}'
     '</style>',
 )
+
+# USB factory seeding uses the same Actions and Activity workspace.
+HTML = HTML.replace(
+    '<strong>Restore</strong><small class="muted">Preview and recover configuration</small></label>',
+    '<strong>Restore</strong><small class="muted">Preview and recover configuration</small></label>'
+    '<label><input type="radio" name="action_mode" value="seed"><strong>Seed device</strong>'
+    '<small class="muted">Install a new device over USB</small></label>',
+).replace(
+    '<section id="active-deployments"',
+    '''<section id="seed-device" class="panel action-new-content mode-hidden">
+<div class="section-head"><div><h2>Seed a new device</h2><p>Connect a blank ESP32-S3 to this computer by USB.</p></div><a class="button secondary" href="api/seed-workbench?mode=seed" target="_blank" rel="noopener">Open USB workspace</a></div>
+<p id="seed-support" class="status" role="status"></p>
+<form id="seed-form"><div class="content-grid">
+<label>Factory image<input name="image" type="file" accept=".bin" required></label>
+<label>Confirmation<input name="confirmation" placeholder="Type SEED" autocomplete="off" required pattern="SEED"></label>
+<label class="check"><input name="credential_retained" type="checkbox" required><span>I have retained the setup password file paired with this factory image.<small>Use this password for first-run setup. It is not uploaded to Management.</small></span></label>
+</div><p class="muted">Choose a private .factory.bin image from the IoT-MD build. The image and password remain on this computer. Select the USB board when the browser prompts you. If it is not detected, hold BOOT while reconnecting USB.</p>
+<p class="warning">Seeding erases the selected board. Its first boot enables secure boot and flash encryption permanently. Keep it powered until first-run setup is available.</p>
+<div class="actions"><span id="seed-status" class="status" role="status"></span><button>Seed device</button></div></form></section>
+<section id="seed-operations" class="panel action-inflight-content hidden"><h2>Current USB seeding</h2><div id="seed-progress"></div></section>
+<p id="seed-outcome" class="status success action-inflight-content hidden" role="status"></p>
+<section id="active-deployments"''',
+    1,
+).replace("['deploy','backup','restore'].includes(requested)", "['deploy','backup','restore','seed'].includes(requested)")
+HTML = HTML.replace(
+    "document.getElementById('deployment-form')?.classList.toggle('mode-hidden',view!=='new'||mode!=='deploy');",
+    "document.getElementById('seed-device')?.classList.toggle('mode-hidden',view!=='new'||mode!=='seed');"
+    "document.getElementById('deployment-form')?.classList.toggle('mode-hidden',view!=='new'||mode!=='deploy');",
+).replace('backupJobs:[],backupDeviceSettings:', 'backupJobs:[],seedJobs:[],backupDeviceSettings:')
+HTML = HTML.replace("'backups','attention'],results=", "'backups','attention','seed'],results=")
+HTML = HTML.replace(
+    'if(values.attention)state.attention=values.attention;',
+    'if(values.attention)state.attention=values.attention;if(values.seed)applySeedState(values.seed);',
+).replace('backupCount=(state.backupJobs||[]).length,',
+          "backupCount=(state.backupJobs||[]).length+(state.seedJobs||[]).filter(item=>!['complete','failed','interrupted'].includes(item.status)).length,")
+HTML = HTML.replace('New deployments and backups will appear here', 'New deployments, backups and USB seeding will appear here')
+HTML = HTML.replace('<option value="backups">Backups</option></select></label><button',
+                    '<option value="backups">Backups</option><option value="seed">USB seeding</option></select></label><button')
+HTML = HTML.replace("filter=['deployments','backups'].includes(requested)", "filter=['deployments','backups','seed'].includes(requested)")
+HTML = HTML.replace("if(filter!=='backups')for(const item of state.deployments", "if(['all','deployments'].includes(filter))for(const item of state.deployments")
+HTML = HTML.replace("if(filter!=='deployments')for(const item of backupState.items", "if(['all','backups'].includes(filter))for(const item of backupState.items")
+HTML = HTML.replace(
+    'records.sort((a,b)=>b.time-a.time);',
+    "if(['all','seed'].includes(filter))for(const item of state.seedJobs.filter(job=>['complete','failed','interrupted'].includes(job.status)))records.push({time:item.created_at,html:seedHistoryItem(item)});records.sort((a,b)=>b.time-a.time);",
+)
+_SEED_SCRIPT = r'''
+function seedHistoryItem(job){return `<article class="event"><time class="event-time">${esc(when(job.created_at))}</time><span class="event-dot"></span><div><div class="title-row"><strong>USB seed · ${esc(job.image)}</strong>${statusBadge(job.status)}</div><p>Browser USB · ${esc(job.detail)}</p></div></article>`}
+function seedFlow(job){return `<div class="flow fleet-flow" style="--flow-columns:5">${['Validate image','Inspect board','Write image','Verify image','First boot'].map((label,index)=>{const done=job.stage>index,active=job.stage===index,tone=done?'done':active?(job.status==='failed'?'failed':'current'):'',percent=done?100:active?job.percent:0;return `<div class="flow-step fleet-flow-step ${tone}"><span class="flow-ring" style="--milestone-progress:${percent}%"><b>${done?'✓':`${percent}%`}</b></span><strong>${label}</strong></div>`}).join('')}</div>`}
+function applySeedState(data){state.seedJobs=data.jobs||[];if(window.localSeedJob){state.seedJobs=state.seedJobs.filter(item=>item.id!==window.localSeedJob.id);state.seedJobs.push(window.localSeedJob)}window.currentSeedJobs=state.seedJobs;const jobs=state.seedJobs.filter(item=>!['complete','failed','interrupted'].includes(item.status)),section=document.getElementById('seed-operations');section.classList.toggle('hidden',!jobs.length);document.getElementById('seed-progress').innerHTML=jobs.map(job=>`<article class="deployment"><div class="title-row"><strong>${esc(job.image)}</strong>${statusBadge(job.status)}</div>${seedFlow(job)}<p>Browser USB · ${esc(job.detail)}</p></article>`).join('')}
+async function refreshSeed(){try{applySeedState(await api('api/seed'));renderDeployments();renderActionHistory()}catch(error){const status=document.getElementById('seed-status');status.className='status error';status.textContent=error.message}}
+if(document.body.dataset.page==='actions')setInterval(refreshSeed,3000);
+'''
+HTML = HTML.replace("const activePage=document.body.dataset.page||'overview';", _SEED_SCRIPT + "\nconst activePage=document.body.dataset.page||'overview';")
+HTML = HTML.replace('</style>', '.action-mode-picker .scope-tabs{grid-template-columns:repeat(4,minmax(0,1fr))}@media(max-width:700px){.action-mode-picker .scope-tabs{grid-template-columns:repeat(2,minmax(0,1fr))}}#seed-progress{margin-top:16px}</style>')
+HTML = HTML.replace('</body>', '<script src="assets/vendor/spark-md5-3.0.2.js"></script><script type="module" src="assets/usb_seed.js"></script></body>')
+HTML = HTML.replace(
+    'rows.join(\'\')}\nasync function acknowledgeAttention',
+    "rows.join('')+state.seedJobs.filter(job=>job.status==='running').map(job=>`<a class=\"operation-row\" href=\"actions?view=inflight#seed-operations\"><span><strong>${esc(job.image)}</strong><small>USB device seeding</small></span>${statusBadge(job.status)}</a>`).join('');section.classList.toggle('hidden',!rows.length&&!state.seedJobs.some(job=>job.status==='running'))}\nasync function acknowledgeAttention",
+)
+HTML = HTML.replace(
+    "const active=state.deployments.filter(item=>['queued','active'].includes(item.status)).length+(state.backupJobs||[]).length;",
+    "const active=state.deployments.filter(item=>['queued','active'].includes(item.status)).length+(state.backupJobs||[]).length+state.seedJobs.filter(job=>job.status==='running').length;",
+)
+HTML = HTML.replace('Deploy an update or profile, create encrypted backups, or begin a device restore.',
+                    'Deploy updates or profiles, back up or restore configuration, or seed a new USB device.')
+HTML = HTML.replace('Monitor deployments, backups and restores that are still running.',
+                    'Monitor deployments, backups, restores and USB seeding that are still running.')

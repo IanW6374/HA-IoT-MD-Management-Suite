@@ -1,0 +1,58 @@
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'iot_md_management/rootfs/app'))
+from fleet_repository import FleetRepository
+from usb_seed import USBSeedManager
+
+
+class USBSeedTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.store = FleetRepository(Path(self.directory.name) / 'fleet.db')
+        self.time = 1000
+        self.manager = USBSeedManager(self.store, now=lambda: self.time)
+
+    def tearDown(self):
+        self.store.connection.close()
+        self.directory.cleanup()
+
+    def start(self):
+        return self.manager.start({'image': 'iot-md.factory.bin', 'sha256': 'a' * 64,
+                                   'confirmation': 'SEED', 'credential_retained': True})
+
+    def test_progress_cannot_backtrack_and_terminal_result_survives_restart(self):
+        job = self.start()
+        self.manager.update(job['id'], {'stage': 2, 'percent': 80})
+        result = self.manager.update(job['id'], {'stage': 2, 'percent': 30})
+        self.assertEqual(result['percent'], 80)
+        with self.assertRaises(ValueError):
+            self.manager.update(job['id'], {'stage': 1})
+        with self.assertRaises(ValueError):
+            self.manager.update(job['id'], {'stage': 2, 'status': 'complete'})
+        self.manager.update(job['id'], {'stage': 5, 'percent': 100, 'status': 'complete'})
+        result = self.manager.update(job['id'], {'stage': 2, 'status': 'running'})
+        self.assertEqual(result['status'], 'complete')
+        self.assertEqual(USBSeedManager(self.store).snapshot()['jobs'][0]['status'], 'complete')
+        self.assertEqual(len(self.store.list_audit()), 2)
+
+    def test_lost_browser_is_unknown_then_late_completion_can_resolve_it(self):
+        job = self.start()
+        self.time += 181
+        self.assertEqual(self.manager.snapshot()['jobs'][0]['status'], 'interrupted')
+        self.assertIn('unknown', self.manager.snapshot()['jobs'][0]['detail'])
+        result = self.manager.update(job['id'], {'stage': 5, 'status': 'complete'})
+        self.assertEqual(result['status'], 'complete')
+
+    def test_password_and_image_bytes_are_not_retained(self):
+        self.manager.start({'image': 'iot-md.factory.bin', 'sha256': 'a' * 64,
+                            'confirmation': 'SEED', 'credential_retained': True,
+                            'password': 'secret-that-must-not-be-stored', 'bytes': 'factory-content'})
+        stored = self.store.metadata('usb_seed_jobs')
+        self.assertNotIn('secret-that-must-not-be-stored', stored)
+        self.assertNotIn('factory-content', stored)
+        with self.assertRaises(ValueError):
+            self.manager.start({'image': 'update.iotuni', 'sha256': 'a' * 64,
+                                'confirmation': 'SEED', 'credential_retained': True})

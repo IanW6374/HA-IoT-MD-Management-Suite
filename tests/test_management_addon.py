@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.7.6', addon)
+        self.assertIn('version: 2.8.0', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -77,6 +77,39 @@ class FleetAddonTests(unittest.TestCase):
             capture_output=True, text=True,
         )
         self.assertEqual(check.returncode, 0, check.stderr)
+
+    def test_usb_workspace_and_local_assets_are_served_through_ingress(self):
+        import threading
+        import urllib.request
+        server = self.module.ThreadingHTTPServer(('127.0.0.1', 0), self.module.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = 'http://127.0.0.1:' + str(server.server_port)
+        try:
+            with urllib.request.urlopen(base + '/api/seed-workbench?mode=seed') as response:
+                content = response.read().decode()
+                self.assertIn('<base href="../">', content)
+                self.assertIn('id="seed-form"', content)
+                self.assertEqual(response.headers['Permissions-Policy'], 'serial=(self)')
+            for asset in ('usb_seed.js', 'vendor/esptool-js-0.7.0.js', 'vendor/spark-md5-3.0.2.js'):
+                with urllib.request.urlopen(base + '/assets/' + asset) as response:
+                    self.assertIn('javascript', response.headers['Content-Type'])
+                    self.assertTrue(response.read())
+            request = urllib.request.Request(base + '/api/seed', data=json.dumps({
+                'image': 'new.factory.bin', 'sha256': 'f' * 64,
+                'confirmation': 'SEED', 'credential_retained': True,
+            }).encode(), headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(request) as response:
+                job = json.load(response)
+                self.assertEqual(response.status, 202)
+            request = urllib.request.Request(base + '/api/seed/' + job['id'],
+                data=json.dumps({'stage': 5, 'status': 'complete'}).encode(),
+                headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(request) as response:
+                self.assertEqual(json.load(response)['status'], 'complete')
+        finally:
+            server.shutdown()
+            server.server_close()
 
     def test_recovery_point_encrypted_badge_is_compact_and_inline(self):
         title = '${esc(item.device_name)} · complete configuration</strong>'
