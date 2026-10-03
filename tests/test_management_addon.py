@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.7.4', addon)
+        self.assertIn('version: 2.7.5', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -211,7 +211,10 @@ class FleetAddonTests(unittest.TestCase):
 
     def test_unified_deployment_workflow_hides_policy_implementation_details(self):
         self.assertIn('data-page-link="actions"', self.module.HTML)
-        self.assertIn('<h1>Actions</h1>', self.module.HTML)
+        self.assertIn('class="nav-menu"', self.module.HTML)
+        self.assertIn('data-action-nav="new"', self.module.HTML)
+        self.assertIn('data-action-nav="inflight"', self.module.HTML)
+        self.assertIn('<h1 id="actions-title">New action</h1>', self.module.HTML)
         self.assertIn('name="action_mode" value="deploy"', self.module.HTML)
         self.assertIn('name="action_mode" value="backup"', self.module.HTML)
         self.assertIn('name="action_mode" value="restore"', self.module.HTML)
@@ -223,8 +226,8 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('if(workflow)workflow.remove()', self.module.HTML)
         self.assertNotIn('aria-label="Deployment workflow"', self.module.HTML)
         self.assertIn('id="deployment-active"', self.module.HTML)
-        self.assertIn('data-action-view="new"', self.module.HTML)
-        self.assertIn('data-action-view="inflight"', self.module.HTML)
+        self.assertNotIn('class="section-subnav"', self.module.HTML)
+        self.assertIn("title.textContent=view==='inflight'?'In-Flight actions':'New action'", self.module.HTML)
         self.assertNotIn('id="deployment-history"', self.module.HTML)
         self.assertIn('id="action-history"', self.module.HTML)
         self.assertNotIn('data-page-link="policy"', self.module.HTML)

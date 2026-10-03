@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.7.5
+
+- Move **New** and **In-Flight** into a real submenu beneath the primary
+  **Actions** navigation item instead of presenting them as an in-page filter.
+- Give each Actions submenu destination its own heading while retaining the
+  automatic transition to In-Flight after an action is accepted.
+
 ## 2.7.4
 
 - Split Actions into focused **New** and **In-Flight** views and switch to
