@@ -376,15 +376,15 @@ HTML = HTML.replace(
 ).replace(
     '<section id="active-deployments"',
     '''<section id="seed-device" class="panel action-new-content mode-hidden">
-<div class="section-head"><div><h2>Seed a new device</h2><p>Connect a blank ESP32-S3 to this computer by USB.</p></div><a class="button secondary" href="api/seed-workbench?mode=seed" target="_blank" rel="noopener">Open USB workspace</a></div>
+<div class="section-head"><div><h2>Seed a new device</h2><p>Connect a blank ESP32-S3 to this computer by USB.</p></div><a id="seed-workspace-link" class="button secondary hidden" href="api/seed-workbench?mode=seed" target="_blank" rel="noopener">Open seeding in a new tab</a></div>
 <p id="seed-support" class="status" role="status"></p>
-<form id="seed-form"><div class="content-grid">
+<form id="seed-form" aria-disabled="true"><fieldset id="seed-settings" class="seed-settings" disabled><div class="content-grid">
 <label>Factory image<input name="image" type="file" accept=".bin" required></label>
 <label>Confirmation<input name="confirmation" placeholder="Type SEED" autocomplete="off" required pattern="SEED"></label>
 <label class="check"><input name="credential_retained" type="checkbox" required><span>I have retained the setup password file paired with this factory image.<small>Use this password for first-run setup. It is not uploaded to Management.</small></span></label>
 </div><p class="muted">Choose a private .factory.bin image from the IoT-MD build. The image and password remain on this computer. Select the USB board when the browser prompts you. If it is not detected, hold BOOT while reconnecting USB.</p>
 <p class="warning">Seeding erases the selected board. Its first boot enables secure boot and flash encryption permanently. Keep it powered until first-run setup is available.</p>
-<div class="actions"><span id="seed-status" class="status" role="status"></span><button>Seed device</button></div></form></section>
+<div class="actions"><span id="seed-status" class="status" role="status"></span><button>Seed device</button></div></fieldset></form></section>
 <section id="seed-operations" class="panel action-inflight-content hidden"><h2>Current USB seeding</h2><div id="seed-progress"></div></section>
 <p id="seed-outcome" class="status success action-inflight-content hidden" role="status"></p>
 <section id="active-deployments"''',
@@ -433,3 +433,4 @@ HTML = HTML.replace('Deploy an update or profile, create encrypted backups, or b
                     'Deploy updates or profiles, back up or restore configuration, or seed a new USB device.')
 HTML = HTML.replace('Monitor deployments, backups and restores that are still running.',
                     'Monitor deployments, backups, restores and USB seeding that are still running.')
+HTML = HTML.replace('</style>', '.seed-settings{border:0;min-width:0;margin:0;padding:0}.seed-settings:disabled{opacity:.45;filter:grayscale(.7)}</style>')

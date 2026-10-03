@@ -1,5 +1,32 @@
 import { ESPLoader, Transport } from './vendor/esptool-js-0.7.0.js';
 
+export function browserName(browser) {
+  const agent = browser.userAgent || '';
+  if (/Edg(?:e|A|iOS)?\//.test(agent)) return 'Edge';
+  if (/OPR\//.test(agent)) return 'Opera';
+  if (/Chrome\/|CriOS\//.test(agent)) return 'Chrome';
+  if (/Firefox\/|FxiOS\//.test(agent)) return 'Firefox';
+  if (/Safari\//.test(agent)) return 'Safari';
+  return 'This browser';
+}
+
+export function usbAvailability(browser, secure, allowed, embedded) {
+  const name = browserName(browser);
+  const ios = /iPhone|iPad|iPod|CriOS|EdgiOS|FxiOS/.test(browser.userAgent || '') ||
+    (browser.platform === 'MacIntel' && browser.maxTouchPoints > 1);
+  const hasSerial = !!browser.serial;
+  const unsupported = !hasSerial && (secure || name === 'Safari' || ios);
+  const issues = [];
+  if (unsupported) issues.push(`${name}${ios ? ' on iOS' : ''} does not support browser USB (Web Serial). Use Chrome or Edge on a desktop computer.`);
+  if (!secure) issues.push(`${issues.length ? 'Home Assistant also' : name + ' detected. Home Assistant'} needs to be opened over HTTPS for browser USB.`);
+  if (issues.length) return {ready: false, workspace: false, message: issues.join(' ')};
+  if (!allowed) return {ready: false, workspace: embedded,
+    message: embedded ? `${name} detected. Home Assistant’s embedded panel blocks USB access. Open the seeding page in a separate tab to continue.` :
+      `${name} detected. This page’s permissions policy blocks USB access.`};
+  return {ready: true, workspace: false,
+    message: `${name} detected. USB connects directly to this computer. Keep this tab open throughout seeding.`};
+}
+
 export function validateFactoryImage(bytes, filename) {
   if (!filename.endsWith('.factory.bin')) throw new Error('Choose an IoT-MD .factory.bin image.');
   if (bytes.length < 0x20000 || bytes.length > 16 * 1024 * 1024) throw new Error('Factory image size is invalid.');
@@ -61,18 +88,16 @@ function initialize() {
   const support = document.getElementById('seed-support'), button = form.querySelector('button');
   const policy = document.permissionsPolicy || document.featurePolicy;
   const allowed = !policy || policy.allowsFeature('serial');
-  if (!window.isSecureContext) {
-    support.textContent = 'Open Home Assistant over HTTPS to use browser USB.';
-    button.disabled = true;
-  } else if (!navigator.serial) {
-    support.textContent = 'Browser USB requires Web Serial. Open this workspace in Chrome or Edge; Safari does not support it.';
-    button.disabled = true;
-  } else if (!allowed) {
-    support.textContent = 'USB access is blocked in the embedded page. Use Open USB workspace to continue in a separate tab.';
-    button.disabled = true;
-  } else {
-    support.textContent = 'USB connects directly to this computer. Keep this tab open throughout seeding.';
-  }
+  const https = window.location.protocol === 'https:' && window.isSecureContext;
+  const availability = usbAvailability(navigator, https, allowed, window.top !== window);
+  support.textContent = availability.message;
+  support.className = availability.ready ? 'status' : 'status error';
+  support.setAttribute('role', availability.ready ? 'status' : 'alert');
+  button.disabled = !availability.ready;
+  form.querySelector('#seed-settings').disabled = !availability.ready;
+  form.setAttribute('aria-disabled', String(!availability.ready));
+  const workspace = document.getElementById('seed-workspace-link');
+  workspace.classList.toggle('hidden', !availability.workspace);
   let running = false;
   async function retryCompletion() {
     try {
@@ -139,7 +164,13 @@ function initialize() {
       form.reset();
     } catch (error) {
       status.className = 'status error';
-      status.textContent = error.name === 'SecurityError' ? 'USB permission was blocked. Open the USB workspace in a separate tab.' : error.message;
+      const canOpenTab = error.name === 'SecurityError' && window.top !== window && https && !!navigator.serial;
+      if (canOpenTab) {
+        workspace.classList.remove('hidden');
+        form.querySelector('#seed-settings').disabled = true;
+        form.setAttribute('aria-disabled', 'true');
+      }
+      status.textContent = canOpenTab ? 'USB permission was blocked. Open the seeding page in a separate tab to continue.' : error.message;
       if (job) {
         job.status = 'failed'; job.detail = error.message;
         await publish()?.catch(() => {});

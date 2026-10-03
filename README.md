@@ -43,7 +43,10 @@ factory artifacts out of public GitHub releases.
 
 Type `SEED`, acknowledge the retained credential, and select the connected
 board in the browser's USB chooser. If Home Assistant's embedded page blocks
-serial access, use **Open USB workspace**. Safari lacks Web Serial support;
+serial access, use **Open seeding in a new tab**; the button is shown only when
+the embedded panel blocks access. Unsupported-browser and HTTPS warnings are
+shown together, and the seeding form stays disabled until its prerequisites
+are met. Safari lacks Web Serial support;
 use Chrome or Edge for this action. No Home Assistant host USB access is needed.
 
 Management inspects the board before erasing, refuses security keys or fuses

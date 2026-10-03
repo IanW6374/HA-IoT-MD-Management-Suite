@@ -1,6 +1,36 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {validateFactoryImage, validateBlankBoard, flashFactory} from '../iot_md_management/rootfs/app/assets/usb_seed.js';
+import {validateFactoryImage, validateBlankBoard, flashFactory, browserName, usbAvailability} from '../iot_md_management/rootfs/app/assets/usb_seed.js';
+
+const safari = {userAgent: 'Mozilla/5.0 (Macintosh) Version/26.0 Safari/605.1.15'};
+const chrome = {userAgent: 'Mozilla/5.0 Chrome/140.0.0.0 Safari/537.36'};
+test('Safari on HTTP shows browser and HTTPS requirements together', () => {
+  const value = usbAvailability(safari, false, true, true);
+  assert.match(value.message, /Safari does not support/);
+  assert.match(value.message, /also.*HTTPS/);
+  assert.equal(value.ready, false);
+  assert.equal(value.workspace, false);
+});
+test('HTTP must not misclassify Chrome as an unsupported browser', () => {
+  const value = usbAvailability(chrome, false, true, true);
+  assert.match(value.message, /Chrome detected/);
+  assert.match(value.message, /HTTPS/);
+  assert.doesNotMatch(value.message, /does not support/);
+  assert.equal(value.workspace, false);
+});
+test('new tab is offered only for a supported secure embedded page with blocked permissions', () => {
+  const browser = {...chrome, serial: {}};
+  assert.equal(usbAvailability(browser, true, false, true).workspace, true);
+  assert.equal(usbAvailability(browser, true, false, false).workspace, false);
+  assert.equal(usbAvailability(browser, true, true, true).workspace, false);
+  assert.equal(usbAvailability(safari, true, false, true).workspace, false);
+  assert.equal(usbAvailability(browser, false, false, true).workspace, false);
+});
+test('actual Web Serial support takes precedence over a browser name', () => {
+  assert.equal(usbAvailability({...safari, serial: {}}, true, true, false).ready, true);
+  assert.equal(browserName({userAgent: 'Chrome/140.0 Safari/537.36 Edg/140.0'}), 'Edge');
+  assert.match(usbAvailability({userAgent: 'CriOS/140.0 Safari/605.1.15'}, true, true, true).message, /Chrome on iOS/);
+});
 
 const blank = () => ({chipId: 9, flashCryptCnt: 0, keyPurposes: [0,0,0,0,0,0,0],
   parsedFlags: {SECURE_BOOT_EN: false, SECURE_DOWNLOAD_ENABLE: false}});

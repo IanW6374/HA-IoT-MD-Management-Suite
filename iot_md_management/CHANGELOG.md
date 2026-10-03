@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.8.1
+
+- Identify the browser and show unsupported-browser and HTTPS requirements
+  together, including when Safari is opened over HTTP.
+- Grey out and disable all seeding inputs and subsequent actions until browser,
+  connection and USB permissions requirements are met.
+- Rename the USB workspace link to **Open seeding in a new tab** and show it
+  only when it can resolve embedded-panel USB permission restrictions.
+
 ## 2.8.0
 
 - Add **Actions > New > Seed device** for a blank ESP32-S3 connected by USB to
