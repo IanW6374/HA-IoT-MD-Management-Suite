@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.7.3
+
+- Place **Back up now** before **Current backup operations** so the selected
+  action reads in normal input-to-progress order.
+- Derive encrypted-backup PBKDF2 keys on the Management host and transfer only
+  the one-time derived key over mutual TLS, preventing constrained devices from
+  blocking their portal and API event loop during managed backup operations.
+- Retain compatibility with existing encrypted recovery points.
+
 ## 2.7.2
 
 - Start the Actions workspace without an implicit action, target scope or

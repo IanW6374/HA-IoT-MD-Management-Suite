@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.7.2', addon)
+        self.assertIn('version: 2.7.3', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -364,6 +364,10 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn("requested=updateUrl?checked", self.module.HTML)
         self.assertIn("deploySelected=document.querySelector", self.module.HTML)
         self.assertIn("syncBackupSteps()", self.module.HTML)
+        self.assertLess(
+            self.module.HTML.index('id="backup-create"'),
+            self.module.HTML.index('id="backup-operations"'),
+        )
 
     def test_equal_maintenance_times_mean_all_day(self):
         from fleet_service import maintenance_window
@@ -1108,6 +1112,7 @@ class FleetAddonTests(unittest.TestCase):
         source = store.get_device('device-1', public=False)
         backup = store.save_backup(source, {
             'format': 'iotmd-secure-backup', 'format_version': 2,
+            'salt': '00' * 16,
             'ciphertext': 'ciphertext', 'tag': 'tag',
         }, 'recovery-password', 'manual')
         client = mock.Mock()
@@ -1144,12 +1149,43 @@ class FleetAddonTests(unittest.TestCase):
             client.request.call_args_list[0].args[0],
             '/api/v2/configuration/backups/preview',
         )
+        preview_request = client.request.call_args_list[0].args[2]
+        self.assertNotIn('password', preview_request)
+        self.assertEqual(len(bytes.fromhex(preview_request['derived_key'])), 32)
         self.assertEqual(
             client.request.call_args_list[1].args,
             ('/api/v2/configuration/backups/apply', 'POST', {
                 'token': 'preview-token'
             }),
         )
+
+    def test_backup_key_derivation_runs_on_management_host(self):
+        from fleet_service import FleetController
+
+        store = mock.Mock()
+        store.get_device.return_value = {
+            'id': 'device-1', 'enabled': True, 'host': 'device.local',
+        }
+        store.save_backup.return_value = {
+            'id': 1, 'size_bytes': 100, 'digest': 'digest',
+        }
+        store.enforce_backup_retention.return_value = 0
+        client = mock.Mock()
+        client.request.side_effect = lambda _path, _method, request: {
+            'backup': {
+                'format': 'iotmd-secure-backup', 'format_version': 2,
+                'salt': request['salt'], 'ciphertext': 'ciphertext', 'tag': 'tag',
+            }
+        }
+        controller = FleetController(store, mock.Mock())
+        controller._client = mock.Mock(return_value=client)
+
+        controller.create_backup('device-1')
+
+        request = client.request.call_args.args[2]
+        self.assertNotIn('password', request)
+        self.assertEqual(len(bytes.fromhex(request['salt'])), 16)
+        self.assertEqual(len(bytes.fromhex(request['derived_key'])), 32)
 
     def test_profile_application_sends_certificates_separately(self):
         import base64

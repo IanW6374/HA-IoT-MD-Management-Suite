@@ -2,12 +2,28 @@
 
 import http.client
 import base64
+import hashlib
 import json
 import os
 import secrets
 import ssl
 import time
 import urllib.request
+
+
+BACKUP_KDF_ITERATIONS = 120000
+BACKUP_SALT_BYTES = 16
+
+
+def backup_derived_key(password, salt=None):
+    """Derive a backup key on the Management host, not on the device loop."""
+    salt = os.urandom(BACKUP_SALT_BYTES) if salt is None else bytes(salt)
+    if len(salt) != BACKUP_SALT_BYTES:
+        raise ValueError('encrypted backup salt is invalid')
+    key = hashlib.pbkdf2_hmac(
+        'sha256', str(password).encode(), salt, BACKUP_KDF_ITERATIONS, dklen=32
+    )
+    return salt, key
 
 
 def bounded_text(value, maximum=256):
@@ -113,8 +129,11 @@ class FleetController:
         if not record.get('enabled'):
             raise ValueError('device is disabled')
         password = secrets.token_urlsafe(32)
+        salt, derived_key = backup_derived_key(password)
         result = self._client(record, timeout=max(self.timeout, 60)).request(
-            '/api/v2/configuration/backups', 'POST', {'password': password}
+            '/api/v2/configuration/backups', 'POST', {
+                'salt': salt.hex(), 'derived_key': derived_key.hex(),
+            }
         )
         backup = self.store.save_backup(
             record, result.get('backup') or {}, password, source
@@ -176,9 +195,15 @@ class FleetController:
         selected = sections or [
             'credentials', 'module_settings', 'certificates_and_trust'
         ]
+        try:
+            salt = bytes.fromhex(str(backup['envelope'].get('salt') or ''))
+        except (TypeError, ValueError):
+            raise ValueError('encrypted backup salt is invalid') from None
+        _salt, derived_key = backup_derived_key(backup['password'], salt)
         result = self._client(target, timeout=max(self.timeout, 60)).request(
             '/api/v2/configuration/backups/preview', 'POST', {
-                'backup': backup['envelope'], 'password': backup['password'],
+                'backup': backup['envelope'],
+                'derived_key': derived_key.hex(),
                 'sections': selected,
             }
         )

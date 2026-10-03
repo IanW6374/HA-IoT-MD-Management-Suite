@@ -134,6 +134,25 @@ HTML = HTML.replace(
     '<span id="backup-now-status" class="status"></span><button>Create backups</button>',
     '<span id="backup-now-status" class="status"></span><button disabled>Create backups</button>',
 )
+
+# The selected action belongs before its live results.  Keep active backup
+# operations beneath the creation form so the workflow reads top-to-bottom:
+# choose targets, start the backup, then monitor it.
+_BACKUP_OPERATIONS_START = HTML.find(
+    '<section id="backup-operations" class="panel action-backup-common hidden">'
+)
+_BACKUP_CREATE_START = HTML.find(
+    '<section id="backup-create" class="panel">', _BACKUP_OPERATIONS_START
+)
+if _BACKUP_OPERATIONS_START >= 0 and _BACKUP_CREATE_START > _BACKUP_OPERATIONS_START:
+    _BACKUP_OPERATIONS_END = HTML.find('</section>', _BACKUP_OPERATIONS_START) + len('</section>')
+    _BACKUP_CREATE_END = HTML.find('</section>', _BACKUP_CREATE_START) + len('</section>')
+    _backup_operations = HTML[_BACKUP_OPERATIONS_START:_BACKUP_OPERATIONS_END]
+    _backup_create = HTML[_BACKUP_CREATE_START:_BACKUP_CREATE_END]
+    HTML = (
+        HTML[:_BACKUP_OPERATIONS_START] + _backup_create + _backup_operations +
+        HTML[_BACKUP_CREATE_END:]
+    )
 HTML = HTML.replace(
     'body[data-page="activity"] [data-page-section="activity"],body[data-page="settings"]',
     'body[data-page="activity"] [data-page-section="activity"],body[data-page="actions"] [data-page-section="actions"],body[data-page="settings"]',
