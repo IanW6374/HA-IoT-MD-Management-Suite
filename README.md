@@ -54,8 +54,12 @@ already provisioned, writes without changing signed image headers, and checks
 the complete image digest before resetting. Keep the USB tab open and power
 connected throughout first-boot security initialization. Then complete the
 device's first-run setup, including its signed application, using the matching
-setup password. A completed seed means the image was verified and reset was
-sent; it does not independently certify first-run network health.
+setup password. The final milestone is **Request reboot**, not first-run
+confirmation. **Image verified** means the image was verified and reset was
+requested; the hotspot and successful startup remain explicitly unconfirmed.
+If no setup hotspot appears, press RESET/EN without holding BOOT and leave the
+device powered throughout security initialization. Do not re-seed a board
+once first boot has enabled its security fuses.
 
 Factory images and passwords never leave the browser computer. Management
 retains only image name, SHA-256 fingerprint and browser-reported progress in

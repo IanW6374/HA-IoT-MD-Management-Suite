@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.8.4
+
+- Generate a real normal-boot reset pulse after verified USB flashing, with
+  BOOT inactive, instead of only releasing the reset signal.
+- Rename the final milestone to **Request reboot** and display **Image
+  verified** rather than claiming successful first-run startup.
+- Explicitly keep hotspot/startup confirmation unknown in completion messages
+  and stored results; provide manual RESET/EN guidance if reboot fails.
+
 ## 2.8.3
 
 - Fix false rejection of blank ESP32-S3 boards whose ROM reports a non-zero

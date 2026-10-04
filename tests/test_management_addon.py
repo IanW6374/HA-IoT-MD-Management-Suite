@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.8.3', addon)
+        self.assertIn('version: 2.8.4', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -77,6 +77,12 @@ class FleetAddonTests(unittest.TestCase):
             capture_output=True, text=True,
         )
         self.assertEqual(check.returncode, 0, check.stderr)
+
+    def test_usb_completion_labels_do_not_claim_successful_first_boot(self):
+        self.assertIn("'Request reboot'", self.module.HTML)
+        self.assertNotIn("'Verify image','First boot'", self.module.HTML)
+        self.assertIn("job.status==='complete'?'Image verified':job.status", self.module.HTML)
+        self.assertIn('First-run startup not confirmed.', self.module.HTML)
 
     def test_usb_workspace_and_local_assets_are_served_through_ingress(self):
         import threading

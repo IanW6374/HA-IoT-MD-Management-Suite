@@ -56,3 +56,18 @@ class USBSeedTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.manager.start({'image': 'update.iotuni', 'sha256': 'a' * 64,
                                 'confirmation': 'SEED', 'credential_retained': True})
+
+    def test_flash_completion_never_claims_startup_confirmation(self):
+        job = self.start()
+        self.assertFalse(job['startup_confirmed'])
+        result = self.manager.update(job['id'], {
+            'stage': 5, 'percent': 100, 'status': 'complete',
+            'startup_confirmed': True,
+        })
+        self.assertFalse(result['startup_confirmed'])
+        self.assertFalse(USBSeedManager(self.store).snapshot()['jobs'][0]['startup_confirmed'])
+
+    def test_legacy_completion_does_not_imply_startup_confirmation(self):
+        self.store.set_metadata('usb_seed_jobs', '[{"id":"legacy","status":"complete"}]')
+        result = USBSeedManager(self.store).snapshot()['jobs'][0]
+        self.assertFalse(result['startup_confirmed'])

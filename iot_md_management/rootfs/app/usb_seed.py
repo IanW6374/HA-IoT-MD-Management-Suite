@@ -16,6 +16,9 @@ class USBSeedManager:
             self.jobs = json.loads(store.metadata('usb_seed_jobs', '[]'))
         except ValueError:
             self.jobs = []
+        # No browser USB operation independently verifies the first-run AP.
+        for job in self.jobs:
+            job['startup_confirmed'] = False
 
     def _save(self):
         self.store.set_metadata('usb_seed_jobs', json.dumps(self.jobs[-100:]))
@@ -31,7 +34,8 @@ class USBSeedManager:
 
     def _audit(self, job):
         self.store.record_audit('device.seed', job['status'], job['image'], 'Browser USB',
-                                {'id': job['id'], 'sha256': job['sha256'], 'detail': job['detail']})
+                                {'id': job['id'], 'sha256': job['sha256'], 'detail': job['detail'],
+                                 'startup_confirmed': False})
 
     def start(self, request):
         if request.get('confirmation') != 'SEED' or request.get('credential_retained') is not True:
@@ -44,6 +48,7 @@ class USBSeedManager:
             job = {'id': uuid.uuid4().hex, 'image': name, 'sha256': digest,
                    'created_at': int(self.now()), 'updated_at': int(self.now()),
                    'status': 'running', 'stage': 1, 'percent': 0,
+                   'startup_confirmed': False,
                    'detail': 'Factory image validated locally. Inspecting the USB board.'}
             self.jobs.append(job)
             self.jobs = self.jobs[-100:]

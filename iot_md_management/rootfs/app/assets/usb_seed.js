@@ -51,6 +51,20 @@ export function validateBlankBoard(security) {
   }
 }
 
+export function factoryHardReset(transport, usingUsbOtg = false) {
+  return {async reset() {
+    // The vendored HardReset releases RTS without first asserting it. Keep
+    // BOOT inactive and generate a real EN/reset pulse for normal flash boot.
+    await transport.setDTR(false);
+    await transport.setRTS(true);
+    await new Promise(resolve => setTimeout(resolve, usingUsbOtg ? 200 : 100));
+    await transport.setRTS(false);
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }};
+}
+
+export const factoryResetConstructors = Object.freeze({hardReset: factoryHardReset});
+
 export async function flashFactory(loader, bytes, md5, progress) {
   await loader.detectChip();
   validateBlankBoard(await loader.getSecurityInfo(false));
@@ -79,9 +93,13 @@ export async function flashFactory(loader, bytes, md5, progress) {
       eraseAll: true, compress: true, calculateMD5Hash: md5,
       reportProgress: (_file, written, total) => progress(2, Math.min(100, Math.floor(written / total * 100)), 'Writing the factory image. Keep USB connected.')});
     if (!verified) throw new Error('The device did not verify the written factory image.');
-    progress(4, 0, 'Starting first boot and security initialization.');
-    await loader.after('hard_reset');
-    progress(5, 100, 'Factory image verified and first boot started. Allow security initialization to finish, then complete first-run setup using the matching setup password.');
+    progress(4, 0, 'Requesting normal boot. First-run startup is not yet confirmed.');
+    try {
+      await loader.after('hard_reset');
+    } catch (error) {
+      throw new Error('Factory image verified, but the reboot request could not be completed. Keep power connected and press RESET/EN without holding BOOT. First-run startup is not confirmed. ' + error.message);
+    }
+    progress(5, 100, 'Factory image written and verified; reboot requested. First-run hotspot is not confirmed. Keep power connected until IoT-MD-Setup appears, then use the matching setup password. If no hotspot appears, press RESET/EN without holding BOOT.');
   } finally {
     loader.flashMd5sum = originalMd5;
   }
@@ -157,6 +175,7 @@ function initialize() {
       status.textContent = '';
       transport = new Transport(port, true);
       const loader = new ESPLoader({transport, baudrate: 115200,
+        resetConstructors: factoryResetConstructors,
         terminal: {clean() {}, write() {}, writeLine() {}}, debugLogging: false});
       heartbeat = setInterval(() => { publish()?.catch(() => {}); }, 2000);
       await flashFactory(loader, bytes, data => window.SparkMD5.ArrayBuffer.hash(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)), progress);
@@ -165,6 +184,7 @@ function initialize() {
       await publish().then(() => { sessionStorage.removeItem('iot-md-seed-completion'); }).catch(() => {});
       const outcome = document.getElementById('seed-outcome');
       outcome.classList.remove('hidden');
+      outcome.classList.remove('success');
       outcome.textContent = job.detail;
       form.reset();
     } catch (error) {

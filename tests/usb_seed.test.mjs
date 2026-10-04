@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {validateFactoryImage, validateBlankBoard, flashFactory, browserName, usbAvailability} from '../iot_md_management/rootfs/app/assets/usb_seed.js';
+import {validateFactoryImage, validateBlankBoard, flashFactory, browserName, usbAvailability, factoryHardReset, factoryResetConstructors} from '../iot_md_management/rootfs/app/assets/usb_seed.js';
+import {ESPLoader} from '../iot_md_management/rootfs/app/assets/vendor/esptool-js-0.7.0.js';
 
 const safari = {userAgent: 'Mozilla/5.0 (Macintosh) Version/26.0 Safari/605.1.15'};
 const chrome = {userAgent: 'Mozilla/5.0 Chrome/140.0.0.0 Safari/537.36'};
@@ -111,10 +112,31 @@ test('missing or malformed real S3 key slots remain fail-closed before flash', a
   }
 });
 test('verified image resets only after digest matches, with ordered progress', async () => {
-  const {loader,calls} = board(), stages=[];
-  await flashFactory(loader, new Uint8Array(4), ()=>'correct', stage=>stages.push(stage));
+  const {loader,calls} = board(), stages=[], details=[];
+  await flashFactory(loader, new Uint8Array(4), ()=>'correct', (stage,percent,detail)=>{stages.push(stage); details.push(detail);});
   assert.deepEqual(calls, ['detect','security','stub','write','verify','reset']);
   assert.deepEqual(stages, [2,2,3,3,4,5]);
+  assert.match(details.at(-1), /reboot requested/);
+  assert.match(details.at(-1), /hotspot is not confirmed/);
+  assert.doesNotMatch(details.at(-1), /first boot started/);
+});
+test('vendored loader uses the factory reset override with BOOT inactive and an actual reset pulse', async () => {
+  const calls=[];
+  const transport={getInfo:()=> 'test port',
+    async setDTR(value){calls.push(['DTR',value]);},
+    async setRTS(value){calls.push(['RTS',value]);}};
+  const loader=new ESPLoader({transport,baudrate:115200,resetConstructors:factoryResetConstructors,
+    terminal:{clean(){},write(){},writeLine(){}}});
+  await loader.after('hard_reset',false);
+  assert.deepEqual(calls,[['DTR',false],['RTS',true],['RTS',false]]);
+});
+test('reset signal failures propagate instead of reporting completed startup', async () => {
+  await assert.rejects(factoryHardReset({async setDTR(){},async setRTS(){throw new Error('USB disconnected');}}).reset(), /USB disconnected/);
+  const {loader,calls}=board(), stages=[];
+  loader.after=async()=>{calls.push('reset'); throw new Error('USB disconnected');};
+  await assert.rejects(flashFactory(loader,new Uint8Array(4),()=>'correct',stage=>stages.push(stage)), /image verified, but the reboot request could not be completed/);
+  assert.ok(!stages.includes(5));
+  assert.equal(calls.at(-1),'reset');
 });
 test('verification failure never starts first boot', async () => {
   const {loader,calls} = board(blank(), 'wrong');
