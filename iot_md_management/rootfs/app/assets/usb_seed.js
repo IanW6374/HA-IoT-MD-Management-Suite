@@ -38,12 +38,15 @@ export function validateFactoryImage(bytes, filename) {
 }
 
 export function validateBlankBoard(security) {
+  // ESP32-S3 has BLOCK_KEY0 through BLOCK_KEY5. GET_SECURITY_INFO includes
+  // a seventh byte that is not another S3 key slot (the ROM can return 12).
   if (security?.chipId !== 9 || !security.parsedFlags ||
       typeof security.parsedFlags.SECURE_BOOT_EN !== 'boolean' ||
       typeof security.parsedFlags.SECURE_DOWNLOAD_ENABLE !== 'boolean' ||
       security.parsedFlags.SECURE_BOOT_EN || security.parsedFlags.SECURE_DOWNLOAD_ENABLE ||
       security.flashCryptCnt !== 0 || !Array.isArray(security.keyPurposes) ||
-      security.keyPurposes.length < 6 || security.keyPurposes.some(value => value !== 0)) {
+      security.keyPurposes.length < 6 ||
+      Array.from(security.keyPurposes.slice(0, 6)).some(value => value !== 0)) {
     throw new Error('The board is already secured or its security state could not be verified. Use secured-device recovery.');
   }
 }

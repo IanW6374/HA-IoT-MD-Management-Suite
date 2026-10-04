@@ -32,7 +32,8 @@ test('actual Web Serial support takes precedence over a browser name', () => {
   assert.match(usbAvailability({userAgent: 'CriOS/140.0 Safari/605.1.15'}, true, true, true).message, /Chrome on iOS/);
 });
 
-const blank = () => ({chipId: 9, flashCryptCnt: 0, keyPurposes: [0,0,0,0,0,0,0],
+// Actual ESP32-S3 ROM response from the blank USB JTAG/serial test board.
+const blank = () => ({chipId: 9, flashCryptCnt: 0, keyPurposes: [0,0,0,0,0,0,12],
   parsedFlags: {SECURE_BOOT_EN: false, SECURE_DOWNLOAD_ENABLE: false}});
 function board(security = blank(), digest = 'correct') {
   const calls = [], loader = {
@@ -86,6 +87,24 @@ test('secured or unreadable boards are refused before erase or flash', async () 
     info=>delete info.parsedFlags, info=>info.chipId=0]) {
     const security = blank(); change(security);
     assert.throws(() => validateBlankBoard(security));
+    const {loader,calls} = board(security);
+    await assert.rejects(flashFactory(loader, new Uint8Array(4), ()=>'correct', ()=>{}));
+    assert.deepEqual(calls, ['detect','security']);
+  }
+});
+test('S3 validates its six key slots, not the seventh ROM response byte', () => {
+  validateBlankBoard(blank());
+  const sixSlots = blank(); sixSlots.keyPurposes = [0,0,0,0,0,0];
+  validateBlankBoard(sixSlots);
+  for (let slot = 0; slot < 6; slot++) {
+    const security = blank(); security.keyPurposes[slot] = 9;
+    assert.throws(() => validateBlankBoard(security));
+  }
+});
+test('missing or malformed real S3 key slots remain fail-closed before flash', async () => {
+  for (const purposes of [undefined, [], [0,0,0,0,0], new Array(6),
+    [0,0,0,0,0,undefined,12], [0,0,0,0,0,'0',12], new Uint8Array(7)]) {
+    const security = blank(); security.keyPurposes = purposes;
     const {loader,calls} = board(security);
     await assert.rejects(flashFactory(loader, new Uint8Array(4), ()=>'correct', ()=>{}));
     assert.deepEqual(calls, ['detect','security']);

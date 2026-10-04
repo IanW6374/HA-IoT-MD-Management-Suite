@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.8.3
+
+- Fix false rejection of blank ESP32-S3 boards whose ROM reports a non-zero
+  seventh key-purpose byte: inspect only the six actual S3 key slots.
+- Keep secured boards and incomplete security responses blocked before any
+  erase or write, with regression coverage using the observed board response.
+
 ## 2.8.2
 
 - Correct browser USB factory-image validation to use IoT-MD's secure partition
