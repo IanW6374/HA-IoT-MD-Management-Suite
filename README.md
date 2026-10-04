@@ -66,7 +66,40 @@ retains only image name, SHA-256 fingerprint and browser-reported progress in
 **Actions > In-Flight** and **Activity**. A lost browser heartbeat is shown as
 an interrupted operation with unknown hardware outcome, without an automatic
 hardware retry. Protected devices use the existing secured-device recovery
-tools instead of this factory workflow.
+workflow below instead of factory flashing.
+
+## Clean USB recovery of a secured device
+
+Open **Actions > New > Clean USB recovery** in desktop Chrome or Edge over
+HTTPS. Connect the device to the browser computer and select its **UART**
+interface, not the native JTAG interface. Leave BOOT released: this action
+requires a bootable IoT-MD core and its running MicroPython UART REPL, not
+ROM download mode. If both core slots are unbootable, this workflow cannot
+recover the board; do not erase it or write a plaintext factory image.
+
+Choose compatible signed `.iotcore` and complete `.iotapp` bundles and a
+retained strong setup-password `.txt` file. Confirm that all user state will
+be erased and type `RECOVER`. Take an encrypted configuration backup first
+if the device is accessible. Private release-signing keys are not required;
+the device validates bundles against its existing verification identity.
+
+Recovery interrupts the application, checks hardware security, writes and
+reads back the inactive encrypted core partition, validates its secure-boot
+image, then erases user settings, credentials, certificates, application
+files and logs. The hardware security keys, encrypted-NVS key material and
+release verification identity are preserved. It verifies the new running
+core, stages the signed application and requests first-run startup. Keep
+power and this tab connected throughout. Complete setup using the retained
+password file and restore the encrypted backup if required.
+
+Seven live milestones appear in **Actions > In-Flight**, with the final
+record in **Activity > USB operations**. Completion does not independently
+confirm the hotspot; check for `IoT-MD-Setup` yourself. Image bytes, password
+contents and UART commands never go to Management or browser storage—only
+operation names, digests, progress and result metadata are retained. On an
+interruption, inspect the board before retrying; there is no automatic
+hardware retry. Hardware qualification of this browser recovery workflow
+is still required before production use.
 
 ## Install
 

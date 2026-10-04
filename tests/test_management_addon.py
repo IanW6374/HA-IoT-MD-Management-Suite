@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.8.4', addon)
+        self.assertIn('version: 2.8.5', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -81,8 +81,22 @@ class FleetAddonTests(unittest.TestCase):
     def test_usb_completion_labels_do_not_claim_successful_first_boot(self):
         self.assertIn("'Request reboot'", self.module.HTML)
         self.assertNotIn("'Verify image','First boot'", self.module.HTML)
-        self.assertIn("job.status==='complete'?'Image verified':job.status", self.module.HTML)
+        self.assertIn("recovery?'Recovery prepared':'Image verified'", self.module.HTML)
         self.assertIn('First-run startup not confirmed.', self.module.HTML)
+
+    def test_secured_usb_recovery_is_a_separate_gated_action(self):
+        html = self.module.HTML
+        self.assertIn('name="action_mode" value="usb-recovery"', html)
+        self.assertIn('id="usb-recovery-form"', html)
+        self.assertIn('name="core" type="file" accept=".iotcore" required', html)
+        self.assertIn('name="application" type="file" accept=".iotapp" required', html)
+        self.assertIn('pattern="RECOVER"', html)
+        self.assertIn('name="erase_confirmed" type="checkbox" required', html)
+        self.assertIn('mode!==\'usb-recovery\'', html)
+        self.assertIn('Inspect security', html)
+        self.assertIn('Reset configuration', html)
+        self.assertIn('Stage application', html)
+        self.assertIn('src="assets/usb_recovery.js"', html)
 
     def test_usb_workspace_and_local_assets_are_served_through_ingress(self):
         import threading
@@ -97,7 +111,7 @@ class FleetAddonTests(unittest.TestCase):
                 self.assertIn('<base href="../">', content)
                 self.assertIn('id="seed-form"', content)
                 self.assertEqual(response.headers['Permissions-Policy'], 'serial=(self)')
-            for asset in ('usb_seed.js', 'vendor/esptool-js-0.7.0.js', 'vendor/spark-md5-3.0.2.js'):
+            for asset in ('usb_seed.js', 'usb_recovery.js', 'vendor/esptool-js-0.7.0.js', 'vendor/spark-md5-3.0.2.js'):
                 with urllib.request.urlopen(base + '/assets/' + asset) as response:
                     self.assertIn('javascript', response.headers['Content-Type'])
                     self.assertTrue(response.read())

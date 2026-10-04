@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.8.5
+
+- Add **Actions / New / Clean USB recovery** using the browser computer's
+  UART interface for already secured ESP32-S3 devices with a bootable core.
+- Verify signed core/application bundles against the existing device trust;
+  write and verify the inactive encrypted OTA partition before erasing user
+  state. Preserve secure-boot, flash/NVS encryption and verification keys.
+- Require retained setup-password file, explicit erase acknowledgement and
+  typed `RECOVER` confirmation. Files and password stay off Management.
+- Show seven live recovery milestones and retain operation metadata in
+  In-Flight and Activity. Do not claim the first-run hotspot was observed.
+- Disable recovery inputs on unsupported browsers or insecure connections.
+
 ## 2.8.4
 
 - Generate a real normal-boot reset pulse after verified USB flashing, with

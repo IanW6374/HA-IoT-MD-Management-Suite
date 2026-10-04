@@ -33,23 +33,38 @@ class USBSeedManager:
             return {'jobs': json.loads(json.dumps(self.jobs[-100:]))}
 
     def _audit(self, job):
-        self.store.record_audit('device.seed', job['status'], job['image'], 'Browser USB',
+        self.store.record_audit('device.usb_recovery' if job.get('kind') == 'recovery' else 'device.seed', job['status'], job['image'], 'Browser USB',
                                 {'id': job['id'], 'sha256': job['sha256'], 'detail': job['detail'],
+                                 'kind': job.get('kind', 'seed'),
+                                 'application': job.get('application', ''),
+                                 'application_sha256': job.get('application_sha256', ''),
                                  'startup_confirmed': False})
 
     def start(self, request):
-        if request.get('confirmation') != 'SEED' or request.get('credential_retained') is not True:
-            raise ValueError('Type SEED and retain the matching setup password file.')
+        kind = request.get('kind', 'seed')
+        if kind not in ('seed', 'recovery'):
+            raise ValueError('Unknown USB operation.')
+        recovery = kind == 'recovery'
+        if request.get('confirmation') != ('RECOVER' if recovery else 'SEED') or request.get('credential_retained') is not True:
+            raise ValueError('Type ' + ('RECOVER' if recovery else 'SEED') + ' and retain the matching setup password file.')
+        if recovery and request.get('erase_confirmed') is not True:
+            raise ValueError('Confirm erasure of device configuration, credentials, certificates and logs.')
         name = str(request.get('image', ''))[:128]
         digest = str(request.get('sha256', ''))
-        if not name.endswith('.factory.bin') or not re.fullmatch(r'[a-f0-9]{64}', digest):
-            raise ValueError('Choose a validated IoT-MD factory image.')
+        if not name.endswith('.iotcore' if recovery else '.factory.bin') or not re.fullmatch(r'[a-f0-9]{64}', digest):
+            raise ValueError('Choose a validated IoT-MD ' + ('signed core bundle.' if recovery else 'factory image.'))
+        application = str(request.get('application', ''))[:128]
+        application_digest = str(request.get('application_sha256', ''))
+        if recovery and (not application.endswith('.iotapp') or not re.fullmatch(r'[a-f0-9]{64}', application_digest)):
+            raise ValueError('Choose a validated signed application bundle.')
         with self.lock:
-            job = {'id': uuid.uuid4().hex, 'image': name, 'sha256': digest,
+            job = {'id': uuid.uuid4().hex, 'kind': kind, 'image': name, 'sha256': digest,
                    'created_at': int(self.now()), 'updated_at': int(self.now()),
                    'status': 'running', 'stage': 1, 'percent': 0,
                    'startup_confirmed': False,
-                   'detail': 'Factory image validated locally. Inspecting the USB board.'}
+                   'detail': 'Signed bundles validated locally. Inspecting the secured UART device.' if recovery else 'Factory image validated locally. Inspecting the USB board.'}
+            if recovery:
+                job.update(application=application, application_sha256=application_digest)
             self.jobs.append(job)
             self.jobs = self.jobs[-100:]
             self._save()
@@ -66,10 +81,11 @@ class USBSeedManager:
             stage = int(request.get('stage', job['stage']))
             percent = int(request.get('percent', job['percent']))
             status = request.get('status', 'running')
-            if not job['stage'] <= stage <= 5 or not 0 <= percent <= 100 or status not in ('running', 'complete', 'failed'):
+            final_stage = 7 if job.get('kind') == 'recovery' else 5
+            if not job['stage'] <= stage <= final_stage or not 0 <= percent <= 100 or status not in ('running', 'complete', 'failed'):
                 raise ValueError('USB seeding progress is invalid.')
-            if status == 'complete' and stage != 5:
-                raise ValueError('Factory image must be verified before completion.')
+            if status == 'complete' and stage != final_stage:
+                raise ValueError('USB operation must finish verification and reboot steps before completion.')
             if stage == job['stage']:
                 percent = max(percent, job['percent'])
             job.update(stage=stage, percent=percent, status=status,

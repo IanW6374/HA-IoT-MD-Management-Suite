@@ -412,8 +412,8 @@ HTML = HTML.replace(
     "if(['all','seed'].includes(filter))for(const item of state.seedJobs.filter(job=>['complete','failed','interrupted'].includes(job.status)))records.push({time:item.created_at,html:seedHistoryItem(item)});records.sort((a,b)=>b.time-a.time);",
 )
 _SEED_SCRIPT = r'''
-function seedHistoryItem(job){return `<article class="event"><time class="event-time">${esc(when(job.created_at))}</time><span class="event-dot"></span><div><div class="title-row"><strong>USB seed · ${esc(job.image)}</strong>${statusBadge(job.status==='complete'?'Image verified':job.status)}</div><p>Browser USB · ${esc(job.status==='complete'?'Factory image verified; reboot requested.':job.detail)}</p>${job.status==='complete'?'<p>First-run startup not confirmed. Check for the IoT-MD-Setup hotspot before completing setup.</p>':''}</div></article>`}
-function seedFlow(job){return `<div class="flow fleet-flow" style="--flow-columns:5">${['Validate image','Inspect board','Write image','Verify image','Request reboot'].map((label,index)=>{const done=job.stage>index,active=job.stage===index,tone=done?'done':active?(job.status==='failed'?'failed':'current'):'',percent=done?100:active?job.percent:0;return `<div class="flow-step fleet-flow-step ${tone}"><span class="flow-ring" style="--milestone-progress:${percent}%"><b>${done?'✓':`${percent}%`}</b></span><strong>${label}</strong></div>`}).join('')}</div>`}
+function seedHistoryItem(job){const recovery=job.kind==='recovery';return `<article class="event"><time class="event-time">${esc(when(job.created_at))}</time><span class="event-dot"></span><div><div class="title-row"><strong>${recovery?'Clean USB recovery':'USB seed'} · ${esc(job.image)}</strong>${statusBadge(job.status==='complete'?(recovery?'Recovery prepared':'Image verified'):job.status)}</div><p>Browser USB · ${esc(job.status==='complete'?(recovery?'Signed core verified; application staged; reboot requested.':'Factory image verified; reboot requested.'):job.detail)}</p>${job.status==='complete'?'<p>First-run startup not confirmed. Check for the IoT-MD-Setup hotspot before completing setup.</p>':''}</div></article>`}
+function seedFlow(job){const labels=job.kind==='recovery'?['Validate bundles','Inspect security','Write core','Verify core','Reset configuration','Stage application','Request reboot']:['Validate image','Inspect board','Write image','Verify image','Request reboot'];return `<div class="flow fleet-flow" style="--flow-columns:${labels.length}">${labels.map((label,index)=>{const done=job.stage>index,active=job.stage===index,tone=done?'done':active?(job.status==='failed'?'failed':'current'):'',percent=done?100:active?job.percent:0;return `<div class="flow-step fleet-flow-step ${tone}"><span class="flow-ring" style="--milestone-progress:${percent}%"><b>${done?'✓':`${percent}%`}</b></span><strong>${label}</strong></div>`}).join('')}</div>`}
 function applySeedState(data){state.seedJobs=data.jobs||[];if(window.localSeedJob){state.seedJobs=state.seedJobs.filter(item=>item.id!==window.localSeedJob.id);state.seedJobs.push(window.localSeedJob)}window.currentSeedJobs=state.seedJobs;const jobs=state.seedJobs.filter(item=>!['complete','failed','interrupted'].includes(item.status)),section=document.getElementById('seed-operations');section.classList.toggle('hidden',!jobs.length);document.getElementById('seed-progress').innerHTML=jobs.map(job=>`<article class="deployment"><div class="title-row"><strong>${esc(job.image)}</strong>${statusBadge(job.status)}</div>${seedFlow(job)}<p>Browser USB · ${esc(job.detail)}</p></article>`).join('')}
 async function refreshSeed(){try{applySeedState(await api('api/seed'));renderDeployments();renderActionHistory()}catch(error){const status=document.getElementById('seed-status');status.className='status error';status.textContent=error.message}}
 if(document.body.dataset.page==='actions')setInterval(refreshSeed,3000);
@@ -434,3 +434,35 @@ HTML = HTML.replace('Deploy an update or profile, create encrypted backups, or b
 HTML = HTML.replace('Monitor deployments, backups and restores that are still running.',
                     'Monitor deployments, backups, restores and USB seeding that are still running.')
 HTML = HTML.replace('</style>', '.seed-settings{border:0;min-width:0;margin:0;padding:0}.seed-settings:disabled{opacity:.45;filter:grayscale(.7)}</style>')
+
+# Secured recovery is deliberately separate from blank-board factory flashing.
+HTML = HTML.replace(
+    '<strong>Seed device</strong><small class="muted">Install a new device over USB</small></label>',
+    '<strong>Seed device</strong><small class="muted">Install a new device over USB</small></label>'
+    '<label><input type="radio" name="action_mode" value="usb-recovery"><strong>Clean USB recovery</strong>'
+    '<small class="muted">Reset a secured device</small></label>',
+).replace("['deploy','backup','restore','seed'].includes(requested)",
+          "['deploy','backup','restore','seed','usb-recovery'].includes(requested)")
+HTML = HTML.replace(
+    "document.getElementById('seed-device')?.classList.toggle('mode-hidden',view!=='new'||mode!=='seed');",
+    "document.getElementById('usb-recovery-device')?.classList.toggle('mode-hidden',view!=='new'||mode!=='usb-recovery');"
+    "document.getElementById('seed-device')?.classList.toggle('mode-hidden',view!=='new'||mode!=='seed');",
+)
+HTML = HTML.replace('<section id="seed-operations"', '''<section id="usb-recovery-device" class="panel action-new-content mode-hidden">
+<div class="section-head"><div><h2>Clean USB recovery</h2><p>Return a secured IoT-MD to first-run setup, preserving its hardware security keys.</p></div><a id="usb-recovery-workspace" class="button secondary hidden" href="api/seed-workbench?mode=usb-recovery" target="_blank" rel="noopener">Open recovery in a new tab</a></div>
+<p id="usb-recovery-support" class="status" role="status"></p>
+<form id="usb-recovery-form"><fieldset class="seed-settings" disabled><div class="content-grid">
+<label>Signed core<input name="core" type="file" accept=".iotcore" required></label>
+<label>Signed application<input name="application" type="file" accept=".iotapp" required></label>
+<label>Setup password file<input name="password_file" type="file" accept=".txt" required><small>Kept on this computer; transferred only to the selected device.</small></label>
+<label>Confirmation<input name="confirmation" placeholder="Type RECOVER" pattern="RECOVER" autocomplete="off" required></label>
+<label class="check"><input name="credential_retained" type="checkbox" required><span>I have retained this setup password file.</span></label>
+<label class="check"><input name="erase_confirmed" type="checkbox" required><span>I understand all application state, settings, credentials, certificates and logs will be erased.</span></label>
+</div><p class="muted">Connect the UART interface, with BOOT released and the existing firmware running. Both bundles must be signed by the device's trusted release identity. No private signing key is needed. Back up configuration before proceeding.</p>
+<p class="warning">This is not ROM or factory flashing. At least one core must still boot and provide the UART REPL. Recovery preserves secure boot, flash encryption and the existing verification key. Keep power connected throughout.</p>
+<div class="actions"><span id="usb-recovery-status" class="status" role="status"></span><button>Recover device</button></div></fieldset></form></section>
+<section id="seed-operations"''', 1)
+HTML = HTML.replace('Current USB seeding', 'Current USB operations').replace('USB seeding</option>', 'USB operations</option>')
+HTML = HTML.replace('grid-template-columns:repeat(4,minmax(0,1fr))}@media(max-width:700px){.action-mode-picker',
+                    'grid-template-columns:repeat(5,minmax(0,1fr))}@media(max-width:700px){.action-mode-picker')
+HTML = HTML.replace('</body>', '<script type="module" src="assets/usb_recovery.js"></script></body>')

@@ -71,3 +71,23 @@ class USBSeedTests(unittest.TestCase):
         self.store.set_metadata('usb_seed_jobs', '[{"id":"legacy","status":"complete"}]')
         result = USBSeedManager(self.store).snapshot()['jobs'][0]
         self.assertFalse(result['startup_confirmed'])
+
+    def test_secured_recovery_requires_bundles_and_explicit_erasure(self):
+        request = {'kind': 'recovery', 'image': 'core.iotcore', 'sha256': 'a' * 64,
+                   'application': 'app.iotapp', 'application_sha256': 'b' * 64,
+                   'confirmation': 'RECOVER', 'credential_retained': True,
+                   'erase_confirmed': True, 'password': 'not-retained'}
+        for changes in ({'erase_confirmed': False}, {'confirmation': 'SEED'},
+                        {'application': 'factory.bin'}, {'image': 'core.factory.bin'},
+                        {'application_sha256': ''}):
+            with self.assertRaises(ValueError):
+                self.manager.start(dict(request, **changes))
+        job = self.manager.start(request)
+        self.assertEqual(job['kind'], 'recovery')
+        self.assertNotIn('not-retained', self.store.metadata('usb_seed_jobs'))
+        with self.assertRaises(ValueError):
+            self.manager.update(job['id'], {'stage': 5, 'status': 'complete'})
+        result = self.manager.update(job['id'], {'stage': 7, 'status': 'complete'})
+        self.assertFalse(result['startup_confirmed'])
+        self.assertEqual(result['status'], 'complete')
+        self.assertIn('device.usb_recovery', str(self.store.list_audit()))

@@ -343,7 +343,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header('Permissions-Policy', 'serial=(self)')
                 self.end_headers()
                 self.wfile.write(body)
-            elif path in ('/assets/usb_seed.js', '/assets/vendor/esptool-js-0.7.0.js',
+            elif path in ('/assets/usb_seed.js', '/assets/usb_recovery.js', '/assets/vendor/esptool-js-0.7.0.js',
                           '/assets/vendor/spark-md5-3.0.2.js'):
                 body = (APP_DIRECTORY / path.lstrip('/')).read_bytes()
                 self.send_response(200)
