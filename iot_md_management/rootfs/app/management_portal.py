@@ -467,6 +467,7 @@ HTML = HTML.replace('Current USB seeding', 'Current USB operations').replace('US
 HTML = HTML.replace('grid-template-columns:repeat(4,minmax(0,1fr))}@media(max-width:700px){.action-mode-picker',
                     'grid-template-columns:repeat(5,minmax(0,1fr))}@media(max-width:700px){.action-mode-picker')
 HTML = HTML.replace('</body>', '<script type="module" src="assets/usb_recovery.js"></script></body>')
+HTML = HTML.replace('<div id="seed-progress">', '<p id="usb-recovery-runtime" class="status hidden" role="status" aria-live="polite"></p><div id="seed-progress">', 1)
 HTML = HTML.replace('</style>', '''
 #usb-recovery-form .content-grid{align-items:start}
 #usb-recovery-form .recovery-control{height:44px;min-width:0}

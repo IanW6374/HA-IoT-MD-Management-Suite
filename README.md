@@ -95,6 +95,14 @@ returns a matching staging receipt before the browser reports completion. Keep
 power and this tab connected throughout. Complete setup using the retained
 password file and restore the encrypted backup if required.
 
+Keep the USB workspace visible and the computer awake until recovery finishes.
+Management requests screen sleep prevention where supported, but browsers release
+this protection when the page becomes hidden; it does not guarantee that the
+computer or USB connection cannot suspend. Recovery uses the core's raw-paste
+receive-window protocol, not short browser timers, to pace command transfers.
+The watchdog remains enabled with an explicit 60-second recovery timeout.
+If flow control is unavailable, recovery stops before sending the command.
+
 Eight live milestones appear in **Actions > In-Flight**, with configuration
 reset, application transfer, handoff and boot validation reported separately. Failed progress stays
 visible there and survives page reload; the final

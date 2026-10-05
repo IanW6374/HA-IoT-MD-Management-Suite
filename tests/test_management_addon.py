@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.8.10', addon)
+        self.assertIn('version: 2.8.11', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -102,6 +102,7 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn("get('usb_job')", html)
         self.assertIn('USB recovery result', html)
         self.assertIn('src="assets/usb_recovery.js"', html)
+        self.assertIn('id="usb-recovery-runtime" class="status hidden" role="status"', html)
 
     def test_usb_password_retention_is_grouped_with_the_file_picker(self):
         html = self.module.HTML

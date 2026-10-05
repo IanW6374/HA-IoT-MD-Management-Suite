@@ -5,6 +5,14 @@ const delay = milliseconds => new Promise(resolve => setTimeout(resolve, millise
 const hex = bytes => [...bytes].map(value => value.toString(16).padStart(2, '0')).join('');
 const digest = async bytes => hex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
 const pyString = value => JSON.stringify(String(value));
+export const RECOVERY_WATCHDOG_MS = 60000;
+const binaryString = bytes => {
+  let value = '';
+  for (let offset = 0; offset < bytes.length; offset += 4096) value += String.fromCharCode(...bytes.subarray(offset, offset + 4096));
+  return value;
+};
+const uartError = () => Object.assign(new Error('The selected USB serial connection was lost or closed. A device reset, USB interruption or computer sleep may have caused this; the cause is not confirmed.'), {code:'UART_DISCONNECTED'});
+const uartTimeout = () => Object.assign(new Error('UART response timed out. Keep the USB workspace visible and computer awake, and check the selected UART interface.'), {code:'UART_TIMEOUT'});
 
 export async function readRecoveryBundle(bytes, filename, type) {
   const magic = type === 'iotcore' ? 'IOTC1\n' : 'IOTA1\n';
@@ -36,10 +44,9 @@ export async function readRecoveryBundle(bytes, filename, type) {
 // Raw REPL uses the running core and encrypted partition API, never ROM flash
 // commands. No DTR/RTS reset sequence or soft reset is used to enter the REPL.
 export class RecoveryREPL {
-  constructor(port) { this.port = port; this.buffer = ''; this.closed = false; this.readFaults = 0; }
+  constructor(port) { this.port = port; this.buffer = ''; this.closed = false; this.readFaults = 0; this.waiters = new Set(); }
   async open() {
     this.closed = false; this.readError = null; this.buffer = '';
-    this.decoder = new TextDecoder();
     await this.port.open({baudRate: 115200});
     await this.port.setSignals({dataTerminalReady: false, requestToSend: false});
     this.writer = this.port.writable.getWriter();
@@ -54,31 +61,59 @@ export class RecoveryREPL {
           while (!this.closed) {
             const {value, done} = await reader.read();
             if (done) break;
-            this.buffer += this.decoder.decode(value, {stream: true});
+            // Preserve all eight bits: raw-paste window sizes are binary,
+            // not UTF-8. Decode only the final command output as text.
+            this.buffer += binaryString(value);
             if (this.buffer.length > 1024 * 1024) {
-              this.readError = new Error('Unexpected UART output.'); return;
+              this.readError = new Error('Unexpected UART output.'); this.notifyInput(); return;
             }
+            this.notifyInput();
           }
         } catch (_) {
-          if (!this.closed) { this.readFaults++; this.decoder = new TextDecoder(); }
+          if (!this.closed) this.readFaults++;
         } finally {
           reader.releaseLock(); if (this.reader === reader) this.reader = null;
         }
         if (!this.closed) await delay(25);
       }
-      if (!this.closed) this.readError = Object.assign(new Error('UART disconnected during recovery.'), {code:'UART_DISCONNECTED'});
+      if (!this.closed) { this.readError = uartError(); this.notifyInput(); }
     })();
   }
-  async write(value) { await this.writer.write(typeof value === 'string' ? encoder.encode(value) : value); }
+  notifyInput() { for (const wake of [...this.waiters]) wake(); }
+  waitForInput(deadline) {
+    return new Promise(resolve => {
+      const wake = () => { clearTimeout(timer); this.waiters.delete(wake); resolve(); };
+      const timer = setTimeout(wake, Math.max(0, deadline - Date.now()));
+      this.waiters.add(wake);
+    });
+  }
+  async write(value) {
+    if (this.closed || !this.writer) throw uartError();
+    if (this.readError) throw this.readError;
+    try { await this.writer.write(typeof value === 'string' ? encoder.encode(value) : value); }
+    catch (_) { this.readError = uartError(); this.notifyInput(); throw this.readError; }
+  }
+  async read(length, timeout = 15000) {
+    const deadline = Date.now() + timeout;
+    while (this.buffer.length < length) {
+      if (this.readError) throw this.readError;
+      if (this.closed) throw uartError();
+      if (Date.now() >= deadline) throw uartTimeout();
+      await this.waitForInput(deadline);
+    }
+    const value = this.buffer.slice(0, length); this.buffer = this.buffer.slice(length);
+    return value;
+  }
   async until(marker, timeout = 15000) {
     const end = Date.now() + timeout;
-    while (Date.now() < end) {
+    while (true) {
       const index = this.buffer.indexOf(marker);
       if (index >= 0) { const value = this.buffer.slice(0, index); this.buffer = this.buffer.slice(index + marker.length); return value; }
       if (this.readError) throw this.readError;
-      await delay(10);
+      if (this.closed) throw uartError();
+      if (Date.now() >= end) throw uartTimeout();
+      await this.waitForInput(end);
     }
-    throw Object.assign(new Error('UART response timed out. Select the UART interface with firmware running, not JTAG or ROM download mode.'), {code:'UART_TIMEOUT'});
   }
   async enter(timeout = 15000) {
     this.buffer = '';
@@ -88,19 +123,36 @@ export class RecoveryREPL {
     await this.until('raw REPL; CTRL-B to exit\r\n>', timeout);
   }
   async exec(source, timeout = 30000) {
-    for (let offset = 0; offset < source.length; offset += 128) {
-      await this.write(source.slice(offset, offset + 128));
-      await delay(2);
+    // Receiver-controlled raw-paste avoids both timer throttling and UART
+    // buffer overflow. Never fall back to an unpaced large raw-REPL write.
+    await this.write('\x05A\x01');
+    if (await this.read(2, timeout) !== 'R\x01') throw new Error('The running core does not support flow-controlled USB recovery. No command was sent; use a supported IoT-MD core.');
+    const header = await this.read(2, timeout), windowSize = header.charCodeAt(0) | (header.charCodeAt(1) << 8);
+    if (!windowSize) throw new Error('Invalid USB recovery flow-control window.');
+    const bytes = encoder.encode(source);
+    let remaining = windowSize;
+    for (let offset = 0; offset < bytes.length;) {
+      while (remaining === 0 || this.buffer.length) {
+        const control = await this.read(1, timeout);
+        if (control === '\x01') remaining += windowSize;
+        else if (control === '\x04') {
+          await this.write('\x04');
+          throw new Error('The device rejected a recovery command before transfer completed. No command will be replayed; inspect the device.');
+        } else throw new Error('Unexpected USB recovery flow-control response.');
+      }
+      const count = Math.min(remaining, bytes.length - offset);
+      await this.write(bytes.subarray(offset, offset + count));
+      remaining -= count; offset += count;
     }
     await this.write('\x04');
-    const ack = await this.until('OK', timeout);
-    if (ack) throw new Error('Unexpected raw REPL response.');
+    const ack = await this.until('\x04', timeout);
+    if ([...ack].some(char => char !== '\x01')) throw new Error('Unexpected USB recovery transfer acknowledgement.');
     const output = await this.until('\x04', timeout);
     const error = await this.until('\x04', timeout);
     await this.until('>', timeout);
     // Do not expose arbitrary UART exceptions (they can contain credentials).
     if (error) throw new Error('The device rejected a recovery step. User state may be partially changed; keep power connected and inspect the device.');
-    return output.trim();
+    return decoder.decode(Uint8Array.from(output, char => char.charCodeAt(0))).trim();
   }
   async reboot() {
     this.buffer = '';
@@ -137,6 +189,7 @@ export class RecoveryREPL {
   async close() {
     this.closed = true;
     this.isOpen = false;
+    this.notifyInput();
     try { await this.reader?.cancel(); } catch (_) {}
     await this.reading;
     this.reader = null; this.writer?.releaseLock(); this.writer = null;
@@ -151,7 +204,7 @@ assert _caps['security']['secure_boot'] and _caps['security']['flash_encryption'
 _running=esp32.Partition(esp32.Partition.RUNNING)
 _target=_running.get_next_update()
 assert _target is not None
-_wdt=machine.WDT(0)
+_wdt=machine.WDT(0,timeout=${RECOVERY_WATCHDOG_MS})
 _wdt.feed()
 print(json.dumps({'device':ubinascii.hexlify(machine.unique_id()).decode(),'capacity':_target.info()[3],'target':_target.info()[4],'running':_running.info()[4]}))`;
 
@@ -303,7 +356,7 @@ export async function recoverSecuredDevice(repl, core, application, password, pr
     progress(4, 100, 'Resume selected: configuration is already unprovisioned; no erasure performed.');
     progress(5, 100, 'Existing recovery core is connected; no intermediate restart required.');
   }
-  await repl.exec(`import esp32, credential_store, core_metadata, app_update, ubinascii, machine\nassert core_metadata.CORE_FIRMWARE_VERSION==${pyString(core.manifest.version)}\nassert not credential_store.is_provisioned()\nassert len(credential_store.bootstrap_key())==${password.length}\nesp32.Partition.mark_app_valid_cancel_rollback()\n_wdt=machine.WDT(0)\n_file=open('.app-update.bundle','wb')`);
+  await repl.exec(`import esp32, credential_store, core_metadata, app_update, ubinascii, machine\nassert core_metadata.CORE_FIRMWARE_VERSION==${pyString(core.manifest.version)}\nassert not credential_store.is_provisioned()\nassert len(credential_store.bootstrap_key())==${password.length}\nesp32.Partition.mark_app_valid_cancel_rollback()\n_wdt=machine.WDT(0,timeout=${RECOVERY_WATCHDOG_MS})\n_file=open('.app-update.bundle','wb')`);
   progress(6, 0, 'Recovery core running. Uploading the signed application.');
   for (let offset = 0; offset < application.bytes.length; offset += 512) {
     await repl.exec(`_file.write(ubinascii.unhexlify('${hex(application.bytes.slice(offset, offset + 512))}'))\n_wdt.feed()`);
@@ -331,10 +384,59 @@ export function configureRecoveryMode(form, resume) {
   form.querySelector('button').textContent = resume ? 'Resume application staging' : 'Recover device';
 }
 
+export class RecoveryActivityGuard {
+  constructor(browser, page, message) {
+    this.browser = browser; this.page = page; this.message = message;
+    this.active = false; this.backgrounded = false; this.wakeLock = null;
+    this.changed = () => { this.update().catch(() => {}); };
+  }
+  start() { this.active = true; this.page.addEventListener('visibilitychange', this.changed); this.changed(); }
+  async update() {
+    if (!this.active) return;
+    if (this.page.hidden) {
+      this.backgrounded = true;
+      this.message('USB recovery is running in the background. Keep this workspace visible and the computer awake; sleep can disconnect USB.');
+      const lock = this.wakeLock; this.wakeLock = null;
+      await lock?.release().catch(() => {});
+      return;
+    }
+    if (this.wakeLock?.released) this.wakeLock = null;
+    if (!this.wakeLock && this.browser.wakeLock) {
+      try {
+        const lock = await this.browser.wakeLock.request('screen');
+        if (!this.active || this.page.hidden || this.wakeLock) await lock.release();
+        else this.wakeLock = lock;
+      } catch (_) { /* Unsupported or denied wake lock must not block USB. */ }
+    }
+    if (this.active && !this.page.hidden) this.message(this.wakeLock
+      ? 'USB recovery is running. Screen sleep prevention is active while this workspace is visible; keep USB connected.'
+      : 'USB recovery is running. Keep this workspace visible, prevent computer sleep and keep USB connected.');
+  }
+  async stop() {
+    this.active = false; this.page.removeEventListener('visibilitychange', this.changed);
+    const lock = this.wakeLock; this.wakeLock = null;
+    await lock?.release().catch(() => {});
+  }
+}
+
+export function recoveryFailure(error, job, backgrounded = false) {
+  if (!['UART_DISCONNECTED','UART_TIMEOUT'].includes(error.code)) return {status:'failed', detail:error.message};
+  let detail;
+  if (job.stage <= 2) detail = 'USB transfer interrupted before configuration reset. This recovery has not erased user configuration; the inactive core write may be incomplete. Check the board before restarting clean recovery.';
+  else if (job.stage === 3) detail = 'USB transfer interrupted while verifying or preparing the core. Configuration erasure has not started. The boot target may have changed; inspect the board before retrying.';
+  else if (job.stage === 4) detail = 'USB transfer interrupted during configuration reset. Erasure may be partially complete; its outcome is unknown. Inspect the board before retrying.';
+  else if (job.stage < 7) detail = 'USB transfer interrupted after setup reset. Application staging may be incomplete. Keep power connected and inspect the board before using non-erasing resume.';
+  else detail = 'Recovery handoff or restart confirmation was interrupted. Recovery may already be complete. Keep power connected and verify the saved device result; do not repeat erasure.';
+  detail += ' Do not factory-flash this secured board.';
+  if (backgrounded) detail += ' This workspace was backgrounded; prevent computer sleep and keep it visible when retrying.';
+  return {status:'interrupted', detail};
+}
+
 function initializeRecovery() {
   const form = document.getElementById('usb-recovery-form');
   if (!form) return;
   const support = document.getElementById('usb-recovery-support'), status = document.getElementById('usb-recovery-status');
+  const runtime = document.getElementById('usb-recovery-runtime');
   const button = form.querySelector('button'), fieldset = form.querySelector('fieldset');
   const policy = document.permissionsPolicy || document.featurePolicy;
   const availability = usbAvailability(navigator, window.isSecureContext && location.protocol === 'https:', !policy || policy.allowsFeature('serial'), window.top !== window);
@@ -346,6 +448,7 @@ function initializeRecovery() {
   const resumeMode = new URLSearchParams(location.search).get('resume') === '1';
   configureRecoveryMode(form, resumeMode);
   let running = false;
+  let activity;
   window.addEventListener('beforeunload', event => { if (running) { event.preventDefault(); event.returnValue = ''; } });
   form.addEventListener('submit', async event => {
     event.preventDefault();
@@ -360,6 +463,11 @@ function initializeRecovery() {
       if (stage !== previousStage || percent === 100) publish()?.catch(() => {});
     };
     running = true; button.disabled = true;
+    activity = new RecoveryActivityGuard(navigator, document, message => {
+      support.textContent = message;
+      runtime.textContent = message; runtime.classList.remove('hidden');
+    });
+    activity.start();
     status.textContent = 'Choose the device’s UART interface. Firmware must be running; do not hold BOOT.';
     try {
       const port = await navigator.serial.requestPort();
@@ -389,9 +497,8 @@ function initializeRecovery() {
       status.className = 'status error'; status.textContent = error.message;
       if (error.name === 'SecurityError' && availability.ready && window.top !== window) workspace.classList.remove('hidden');
       if (job) {
-        const unconfirmed = job.stage >= 7 && ['UART_DISCONNECTED','UART_TIMEOUT'].includes(error.code);
-        job.status = unconfirmed ? 'interrupted' : 'failed';
-        job.detail = unconfirmed ? 'Core and application were transferred; final device confirmation is unavailable. Recovery may already be complete. Keep power connected; do not erase or factory-flash again. ' + error.message : error.message;
+        Object.assign(job, recoveryFailure(error, job, activity.backgrounded));
+        status.textContent = job.detail;
         try { sessionStorage.setItem('iot-md-seed-completion', JSON.stringify(job)); } catch (_) {}
         await publish().then(() => sessionStorage.removeItem('iot-md-seed-completion')).catch(() => {});
       }
@@ -404,6 +511,8 @@ function initializeRecovery() {
       }
     } finally {
       clearInterval(timer); if (repl) await repl.close().catch(() => {});
+      await activity.stop(); support.textContent = availability.message.replaceAll('seeding', 'USB recovery');
+      runtime.classList.add('hidden'); runtime.textContent = '';
       running = false; button.disabled = false; window.localSeedJob = null;
       form.elements.confirmation.value = ''; window.refreshSeed();
     }

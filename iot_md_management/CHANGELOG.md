@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.8.11
+
+- Use MicroPython's receiver-controlled raw-paste protocol for USB recovery,
+  eliminating short per-piece timers and response polling that can be throttled
+  in background tabs. Preserve binary flow-control bytes and UTF-8 output.
+- Keep the recovery watchdog enabled with an explicit 60-second timeout instead
+  of inadvertently reconfiguring it to MicroPython's five-second default.
+- Request best-effort screen sleep prevention while the workspace is visible,
+  warn when it is backgrounded, and release the wake lock when recovery ends.
+  Browser/OS suspension and USB disconnection remain possible.
+- Classify serial write loss as interrupted, with stage-specific guidance and
+  background-tab context. Never replay writes, configuration erasure or reset
+  automatically; retain all signature, readback and device-identity checks.
+- Existing Alpha 97/98 cores already provide the raw-paste protocol; no new
+  device image is needed. Unsupported flow control stops before sending code.
+
 ## 2.8.10
 
 - Group the required setup-password retention acknowledgement with its file

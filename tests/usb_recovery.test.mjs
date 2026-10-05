@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {webcrypto} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
-import {readRecoveryBundle, recoverSecuredDevice, recoveryPreflight, recoveryResultProbe, confirmRecoveryAfterReset, eraseRecoveryState, verifyRecoveryManifests, RecoveryREPL, configureRecoveryMode} from '../iot_md_management/rootfs/app/assets/usb_recovery.js';
+import {readRecoveryBundle, recoverSecuredDevice, recoveryPreflight, recoveryResultProbe, confirmRecoveryAfterReset, eraseRecoveryState, verifyRecoveryManifests, RecoveryREPL, configureRecoveryMode, RECOVERY_WATCHDOG_MS, RecoveryActivityGuard, recoveryFailure} from '../iot_md_management/rootfs/app/assets/usb_recovery.js';
 if (!globalThis.crypto) globalThis.crypto = webcrypto;
 const sha = async bytes => Buffer.from(await crypto.subtle.digest('SHA-256', bytes)).toString('hex');
 test('normal recovery hides resume, while contextual retry explains its non-erasing operation', () => {
@@ -106,12 +106,160 @@ test('device Python snippets compile without execution', async () => {
   const result=spawnSync('python3',['-c','import json,sys\nfor s in json.load(sys.stdin): compile(s,"recovery","exec")'],{input:JSON.stringify(sources),encoding:'utf8'});
   assert.equal(result.status,0,result.stderr);
 });
-test('raw REPL framing consumes split output and masks device exceptions', async () => {
-  const repl=new RecoveryREPL({}); repl.write=async()=>{};
-  repl.buffer='OKresult\x04\x04>';
-  assert.equal(await repl.exec('print("result")'),'result');
-  repl.buffer='OK\x04Traceback secret-password\x04>';
-  await assert.rejects(repl.exec('bad()'),error=>!error.message.includes('secret-password') && /rejected/.test(error.message));
+async function flowControlledREPL({windowSize=128,output='result',deviceError='',splitReads=false,abortAfter=Infinity}={}) {
+  let controller, receiving=false, available=0, consumed=0, aborted=false;
+  const chunks=[], calls=[];
+  const emit = bytes => {
+    if (splitReads) for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
+    else controller.enqueue(bytes);
+  };
+  const port = {
+    async open(){}, async setSignals(){}, async close(){},
+    readable:new ReadableStream({start(value){controller=value;}}),
+    writable:new WritableStream({write(chunk){
+      calls.push(new Uint8Array(chunk));
+      if (!receiving) {
+        assert.deepEqual([...chunk],[5,65,1]);
+        receiving=true; available=2*windowSize; consumed=0;
+        emit(Uint8Array.of(82,1,windowSize&255,windowSize>>8,1));
+      } else if (chunk.length===1 && chunk[0]===4) {
+        receiving=false;
+        if (!aborted) emit(Buffer.concat([Buffer.from([4]),Buffer.from(output),Buffer.from([4]),Buffer.from(deviceError),Buffer.from([4,62])]));
+      } else {
+        assert.ok(chunk.length<=available,'host exceeded negotiated receive window');
+        available-=chunk.length; chunks.push(new Uint8Array(chunk));
+        const before=Math.floor(consumed/windowSize); consumed+=chunk.length;
+        if (consumed>=abortAfter) { aborted=true; emit(Uint8Array.of(4)); }
+        else for (let count=before;count<Math.floor(consumed/windowSize);count++) {available+=windowSize;emit(Uint8Array.of(1));}
+      }
+    }}),
+  };
+  const repl=new RecoveryREPL(port); await repl.open();
+  return {repl,chunks,calls};
+}
+
+test('raw-paste framing preserves binary window bytes, split UTF-8 output and sanitized exceptions', async () => {
+  for (const options of [{output:'résult ✓',splitReads:true},{deviceError:'Traceback secret-password',splitReads:true}]) {
+    const {repl}=await flowControlledREPL(options);
+    try {
+      if (options.deviceError) await assert.rejects(repl.exec('bad()'),error=>!error.message.includes('secret-password') && /rejected/.test(error.message));
+      else assert.equal(await repl.exec('print("result")'),'résult ✓');
+    } finally {await repl.close();}
+  }
+});
+
+test('large core commands use receiver credits without background-sensitive pacing or polling', async () => {
+  const source='_target.writeblocks(0,ubinascii.unhexlify("'+'ff'.repeat(4096)+'"))\n_wdt.feed()';
+  const {repl,chunks}=await flowControlledREPL({splitReads:true});
+  const original=setTimeout, scheduled=[];
+  globalThis.setTimeout=(callback,milliseconds,...args)=>{scheduled.push(milliseconds);return original(callback,Math.max(1000,milliseconds),...args);};
+  try {
+    assert.equal(await repl.exec(source),'result');
+    assert.equal(Buffer.concat(chunks).toString(),source);
+    assert.ok(chunks.length>30);
+    assert.ok(scheduled.every(milliseconds=>milliseconds>=15000),'transfer must not depend on short timers');
+    assert.equal(repl.waiters.size,0);
+    assert.equal(await repl.exec('print("next command")'),'result');
+  } finally {globalThis.setTimeout=original;await repl.close();}
+});
+
+test('unsupported or malformed flow control stops without sending source or falling back', async () => {
+  for (const response of ['R\x00','ra','R\x01\x00\x00']) {
+    const repl=new RecoveryREPL({}), calls=[];
+    repl.writer={async write(bytes){calls.push([...bytes]);}};
+    repl.buffer=response;
+    await assert.rejects(repl.exec('dangerous()'),/support|window/);
+    assert.deepEqual(calls,[[5,65,1]]);
+  }
+});
+
+test('receiver abort prevents further source transfer and never replays the command', async () => {
+  const {repl,chunks,calls}=await flowControlledREPL({abortAfter:128,splitReads:true});
+  try {
+    await assert.rejects(repl.exec('x'.repeat(8192)),/before transfer completed/);
+    assert.ok(Buffer.concat(chunks).length<=256);
+    assert.deepEqual([...calls.at(-1)],[4]);
+    assert.equal(calls.filter(value=>value.length===3&&value[0]===5).length,1);
+  } finally {await repl.close();}
+});
+
+test('closed serial writes are classified without exposing native exception contents or replaying', async () => {
+  const repl=new RecoveryREPL({}); let writes=0;
+  repl.writer={async write(){writes++;throw new Error('Port has been closed: secret-password');}};
+  await assert.rejects(repl.exec('source'),error=>error.code==='UART_DISCONNECTED'&&!error.message.includes('secret-password'));
+  assert.equal(writes,1);
+  await assert.rejects(repl.write('more source'),error=>error.code==='UART_DISCONNECTED');
+  assert.equal(writes,1);
+});
+
+test('close wakes pending reads immediately and releases timeout waiters', async () => {
+  const port={async close(){}}, repl=new RecoveryREPL(port);
+  const pending=repl.read(1).catch(error=>error);
+  await repl.close();
+  assert.equal((await pending).code,'UART_DISCONNECTED');
+  assert.equal(repl.waiters.size,0);
+});
+
+test('recovery watchdog stays enabled with an explicit policy-sized timeout in both paths', async () => {
+  assert.equal(RECOVERY_WATCHDOG_MS,60000);
+  for (const legacy of [false,true]) {
+    const [core,app]=await bundles(legacy), repl=fakeREPL(core,'',app);
+    await recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x',()=>{},legacy);
+    const watchdog=repl.calls.filter(source=>source.includes('machine.WDT('));
+    assert.ok(watchdog.length);
+    for (const source of watchdog) {
+      assert.match(source,/machine\.WDT\(0,timeout=60000\)/);
+      assert.doesNotMatch(source,/machine\.WDT\(0\)/);
+    }
+  }
+});
+
+test('transport failures preserve stage-specific uncertainty instead of blaming a closed tab', () => {
+  const error={code:'UART_DISCONNECTED',message:'native error'};
+  for (let stage=1;stage<=7;stage++) {
+    const result=recoveryFailure(error,{stage},true);
+    assert.equal(result.status,'interrupted');
+    assert.match(result.detail,/backgrounded/);
+    assert.match(result.detail,/Do not factory-flash/);
+    if (stage<=2) assert.match(result.detail,/has not erased user configuration/);
+    if (stage===3) assert.match(result.detail,/boot target may have changed/);
+    if (stage===4) assert.match(result.detail,/partially complete/);
+    if (stage>=7) assert.match(result.detail,/may already be complete/);
+    assert.doesNotMatch(result.detail,/native error/);
+  }
+  assert.equal(recoveryFailure({message:'signature invalid'},{stage:1}).status,'failed');
+});
+
+function guardPage() {
+  const listeners=new Map();
+  return {hidden:false,listeners,addEventListener(name,callback){listeners.set(name,callback);},removeEventListener(name){listeners.delete(name);}};
+}
+test('sleep guard warns on backgrounding, reacquires on foreground and releases on completion', async () => {
+  const page=guardPage(), messages=[], locks=[];
+  const browser={wakeLock:{async request(type){assert.equal(type,'screen');const lock={released:false,async release(){this.released=true;}};locks.push(lock);return lock;}}};
+  const guard=new RecoveryActivityGuard(browser,page,message=>messages.push(message));
+  guard.start(); await Promise.resolve(); await Promise.resolve();
+  assert.equal(guard.wakeLock,locks[0]);
+  page.hidden=true; await guard.update();
+  assert.equal(guard.backgrounded,true); assert.equal(locks[0].released,true);
+  assert.match(messages.at(-1),/background/);
+  page.hidden=false; await guard.update();
+  assert.equal(locks.length,2);
+  await guard.stop(); assert.equal(locks[1].released,true);assert.equal(page.listeners.size,0);
+});
+
+test('unavailable or denied sleep prevention never blocks USB, and late locks are released', async () => {
+  for (const browser of [{},{wakeLock:{async request(){throw new Error('denied');}}}]) {
+    const page=guardPage(), guard=new RecoveryActivityGuard(browser,page,()=>{});
+    guard.start();await Promise.resolve();await guard.stop();
+    assert.equal(guard.wakeLock,null);
+  }
+  let grant;
+  const page=guardPage(), guard=new RecoveryActivityGuard({wakeLock:{request(){return new Promise(resolve=>{grant=resolve;});}}},page,()=>{});
+  guard.start();await guard.stop();
+  const lock={released:false,async release(){this.released=true;}};
+  grant(lock);await Promise.resolve();await Promise.resolve();
+  assert.equal(lock.released,true);assert.equal(guard.wakeLock,null);
 });
 
 test('recoverable Web Serial read faults release the reader and resume reception', async () => {
