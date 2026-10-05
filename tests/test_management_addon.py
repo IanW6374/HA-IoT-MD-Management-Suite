@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.8.9', addon)
+        self.assertIn('version: 2.8.10', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -97,10 +97,44 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('Reset configuration', html)
         self.assertIn('Stage application', html)
         self.assertIn('Restart & reconnect', html)
-        self.assertIn('name="resume" type="checkbox"', html)
+        self.assertIn('name="resume" type="hidden" value="0"', html)
+        self.assertNotIn('name="resume" type="checkbox"', html)
         self.assertIn("get('usb_job')", html)
         self.assertIn('USB recovery result', html)
         self.assertIn('src="assets/usb_recovery.js"', html)
+
+    def test_usb_password_retention_is_grouped_with_the_file_picker(self):
+        html = self.module.HTML
+        form = html.split('<form id="usb-recovery-form">', 1)[1].split('</form>', 1)[0]
+        password_group = form.split('<div class="recovery-password-selection">', 1)[1].split('</div>', 1)[0]
+        self.assertIn('name="password_file"', password_group)
+        self.assertIn('name="credential_retained" type="checkbox" required', password_group)
+        self.assertEqual(form.count('name="credential_retained"'), 1)
+        self.assertIn('<label for="usb-recovery-password">Setup password file</label>', form)
+        self.assertIn('class="recovery-control" name="confirmation"', form)
+        self.assertIn('#usb-recovery-form .content-grid{align-items:start}', html)
+        self.assertIn('.recovery-control{height:44px;min-width:0}', html)
+        self.assertIn('id="usb-recovery-resume-notice" class="status hidden"', html)
+
+    def test_resume_is_only_offered_after_configuration_reset(self):
+        runtime = shutil.which('node')
+        if not runtime:
+            self.skipTest('Node.js is required for contextual USB retry validation')
+        script = self.module.HTML.split('function canResumeRecovery(job)', 1)[1].split('\n', 1)[0]
+        check = subprocess.run([runtime, '-e', 'const canResumeRecovery = function(job)' + script + ''';
+const assert = require('node:assert/strict');
+for (const status of ['failed', 'interrupted']) {
+  for (let stage=0; stage<=8; stage++) {
+    assert.equal(canResumeRecovery({kind:'recovery',status,stage}),stage>=5);
+    assert.equal(canResumeRecovery({kind:'seed',status,stage}),false);
+  }
+}
+for (const status of ['complete','running']) {
+  assert.equal(canResumeRecovery({kind:'recovery',status,stage:8}),false);
+}
+'''], capture_output=True, text=True)
+        self.assertEqual(check.returncode, 0, check.stderr)
+        self.assertIn('${canResumeRecovery(focused)?', self.module.HTML)
 
     def test_usb_workspace_and_local_assets_are_served_through_ingress(self):
         import threading

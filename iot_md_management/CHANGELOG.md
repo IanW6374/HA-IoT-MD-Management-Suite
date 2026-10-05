@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.8.10
+
+- Group the required setup-password retention acknowledgement with its file
+  picker, and align the equally sized recovery confirmation and file controls.
+- Remove the resume selector from normal clean USB recovery. Offer non-erasing
+  application staging only from an interrupted or failed recovery result after
+  configuration reset, with explicit resume instructions and approval.
+- Keep the existing device identity, core, trust and setup-password checks for
+  interrupted recovery; no changes to the secured-device recovery protocol.
+
 ## 2.8.9
 
 - Treat console disappearance during recovery reset as a reconnectable event,

@@ -317,6 +317,20 @@ export async function recoverSecuredDevice(repl, core, application, password, pr
   return board.device;
 }
 
+export function configureRecoveryMode(form, resume) {
+  form.elements.resume.value = resume ? '1' : '0';
+  const section = form.closest('section');
+  section.querySelector('h2').textContent = resume ? 'Resume interrupted recovery' : 'Clean USB recovery';
+  section.querySelector('.section-head p').textContent = resume
+    ? 'Finish staging after an interrupted recovery, preserving the running core and existing setup state.'
+    : 'Return a secured IoT-MD to first-run setup, preserving its hardware security keys.';
+  section.querySelector('#usb-recovery-resume-notice').classList.toggle('hidden', !resume);
+  section.querySelector('#usb-recovery-approval').textContent = resume
+    ? 'I approve resuming application staging only, without a core write or configuration erase.'
+    : 'I approve clean recovery, which erases all user configuration, credentials, certificates and logs.';
+  form.querySelector('button').textContent = resume ? 'Resume application staging' : 'Recover device';
+}
+
 function initializeRecovery() {
   const form = document.getElementById('usb-recovery-form');
   if (!form) return;
@@ -329,7 +343,8 @@ function initializeRecovery() {
   fieldset.disabled = !availability.ready;
   const workspace = document.getElementById('usb-recovery-workspace');
   workspace.classList.toggle('hidden', !availability.workspace);
-  form.elements.resume.checked = new URLSearchParams(location.search).get('resume') === '1';
+  const resumeMode = new URLSearchParams(location.search).get('resume') === '1';
+  configureRecoveryMode(form, resumeMode);
   let running = false;
   window.addEventListener('beforeunload', event => { if (running) { event.preventDefault(); event.returnValue = ''; } });
   form.addEventListener('submit', async event => {
@@ -353,7 +368,7 @@ function initializeRecovery() {
       const application = await readRecoveryBundle(new Uint8Array(await appFile.arrayBuffer()), appFile.name, 'iotapp');
       const password = (await form.elements.password_file.files[0].text()).trim();
       if (!/^[\x21-\x7e]{16,63}$/.test(password) || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password)) throw new Error('Choose the retained strong setup-password file (16–63 printable characters).');
-      const resume = form.elements.resume.checked;
+      const resume = form.elements.resume.value === '1';
       job = await window.api('api/seed', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({kind:'recovery', milestone_count:8, handoff_version:Number(core.manifest.release_sequence)>=2802?1:0, resume, image:core.filename, application:application.filename, sha256:core.sha256, application_sha256:application.sha256, confirmation:form.elements.confirmation.value, credential_retained:form.elements.credential_retained.checked, erase_confirmed:form.elements.erase_confirmed.checked})});
       window.setActionView('inflight', true);
       const query = new URLSearchParams(location.search); query.set('usb_job', job.id);
@@ -368,6 +383,7 @@ function initializeRecovery() {
       await publish().then(() => sessionStorage.removeItem('iot-md-seed-completion')).catch(() => {});
       const outcome = document.getElementById('seed-outcome'); outcome.classList.remove('hidden','success'); outcome.textContent = job.detail;
       form.reset();
+      configureRecoveryMode(form, resumeMode);
     } catch (error) {
       // Serial errors are safe; device exceptions are deliberately sanitized by RecoveryREPL.
       status.className = 'status error'; status.textContent = error.message;

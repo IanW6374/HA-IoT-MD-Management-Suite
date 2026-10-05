@@ -2,9 +2,25 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {webcrypto} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
-import {readRecoveryBundle, recoverSecuredDevice, recoveryPreflight, recoveryResultProbe, confirmRecoveryAfterReset, eraseRecoveryState, verifyRecoveryManifests, RecoveryREPL} from '../iot_md_management/rootfs/app/assets/usb_recovery.js';
+import {readRecoveryBundle, recoverSecuredDevice, recoveryPreflight, recoveryResultProbe, confirmRecoveryAfterReset, eraseRecoveryState, verifyRecoveryManifests, RecoveryREPL, configureRecoveryMode} from '../iot_md_management/rootfs/app/assets/usb_recovery.js';
 if (!globalThis.crypto) globalThis.crypto = webcrypto;
 const sha = async bytes => Buffer.from(await crypto.subtle.digest('SHA-256', bytes)).toString('hex');
+test('normal recovery hides resume, while contextual retry explains its non-erasing operation', () => {
+  const nodes = new Map(['h2','.section-head p','#usb-recovery-resume-notice','#usb-recovery-approval'].map(selector => [selector, {
+    textContent:'', classList:{toggle(name, hidden) { this.hidden = hidden; }}
+  }]));
+  const button = {textContent:''};
+  const form = {elements:{resume:{value:''}}, closest(){return {querySelector:selector=>nodes.get(selector)};}, querySelector(){return button;}};
+  for (const resume of [false, true, false]) {
+    configureRecoveryMode(form, resume);
+    assert.equal(form.elements.resume.value, resume ? '1' : '0');
+    assert.equal(nodes.get('#usb-recovery-resume-notice').classList.hidden, !resume);
+    assert.equal(nodes.get('h2').textContent, resume ? 'Resume interrupted recovery' : 'Clean USB recovery');
+    assert.equal(button.textContent, resume ? 'Resume application staging' : 'Recover device');
+    assert.match(nodes.get('#usb-recovery-approval').textContent, resume ? /without a core write or configuration erase/ : /erases all user configuration/);
+    assert.match(nodes.get('.section-head p').textContent, resume ? /preserving the running core/ : /first-run setup/);
+  }
+});
 const base = {format_version:6, target_board:'esp32-s3', signature:'a'.repeat(128), signature_scheme:'ecdsa-p256-sha256', version:'3.0.0-alpha.96'};
 function pack(type, manifest, payload) {
   const header = Buffer.from(JSON.stringify(manifest)), size = Buffer.alloc(4);
