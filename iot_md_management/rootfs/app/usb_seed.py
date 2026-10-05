@@ -38,6 +38,7 @@ class USBSeedManager:
                                  'kind': job.get('kind', 'seed'),
                                  'application': job.get('application', ''),
                                  'application_sha256': job.get('application_sha256', ''),
+                                 'resume': job.get('resume', False),
                                  'startup_confirmed': False})
 
     def start(self, request):
@@ -57,6 +58,9 @@ class USBSeedManager:
         application_digest = str(request.get('application_sha256', ''))
         if recovery and (not application.endswith('.iotapp') or not re.fullmatch(r'[a-f0-9]{64}', application_digest)):
             raise ValueError('Choose a validated signed application bundle.')
+        milestone_count = request.get('milestone_count', 7) if recovery else 5
+        if milestone_count not in (7, 8) and recovery:
+            raise ValueError('USB recovery milestone count is invalid.')
         with self.lock:
             job = {'id': uuid.uuid4().hex, 'kind': kind, 'image': name, 'sha256': digest,
                    'created_at': int(self.now()), 'updated_at': int(self.now()),
@@ -64,7 +68,8 @@ class USBSeedManager:
                    'startup_confirmed': False,
                    'detail': 'Signed bundles validated locally. Inspecting the secured UART device.' if recovery else 'Factory image validated locally. Inspecting the USB board.'}
             if recovery:
-                job.update(application=application, application_sha256=application_digest)
+                job.update(application=application, application_sha256=application_digest,
+                           milestone_count=milestone_count, resume=request.get('resume') is True)
             self.jobs.append(job)
             self.jobs = self.jobs[-100:]
             self._save()
@@ -81,7 +86,7 @@ class USBSeedManager:
             stage = int(request.get('stage', job['stage']))
             percent = int(request.get('percent', job['percent']))
             status = request.get('status', 'running')
-            final_stage = 7 if job.get('kind') == 'recovery' else 5
+            final_stage = job.get('milestone_count', 7) if job.get('kind') == 'recovery' else 5
             if not job['stage'] <= stage <= final_stage or not 0 <= percent <= 100 or status not in ('running', 'complete', 'failed'):
                 raise ValueError('USB seeding progress is invalid.')
             if status == 'complete' and stage != final_stage:

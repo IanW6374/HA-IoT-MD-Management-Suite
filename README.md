@@ -92,7 +92,9 @@ core, stages the signed application and requests first-run startup. Keep
 power and this tab connected throughout. Complete setup using the retained
 password file and restore the encrypted backup if required.
 
-Seven live milestones appear in **Actions > In-Flight**, with the final
+Eight live milestones appear in **Actions > In-Flight**, with configuration
+reset and **Restart & reconnect** reported separately. Failed progress stays
+visible there and survives page reload; the final
 record in **Activity > USB operations**. Completion does not independently
 confirm the hotspot; check for `IoT-MD-Setup` yourself. Image bytes, password
 contents and UART commands never go to Management or browser storage—only
@@ -100,6 +102,16 @@ operation names, digests, progress and result metadata are retained. On an
 interruption, inspect the board before retrying; there is no automatic
 hardware retry. Hardware qualification of this browser recovery workflow
 is still required before production use.
+
+If recovery stops after configuration reset, select **Resume application
+staging only**, retaining the same signed core/application bundles and setup
+password file. The device must still be unprovisioned; the running core's
+partition digest must match the selected core bundle and the setup password
+must match the device. Resume performs no core write or configuration erase;
+it verifies, stages the application, clears stale recovery requests and
+requests startup. Do not automatically repeat the full recovery after a
+lost connection. Reopen the browser page after updating Management to load
+the corrected USB transport.
 
 ## Install
 

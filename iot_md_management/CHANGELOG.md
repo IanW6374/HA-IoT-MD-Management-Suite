@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.8.6
+
+- Recover browser serial readers after non-fatal framing errors; reopen a
+  stale UART port at most once when reconnecting after a core restart.
+- Separate confirmed configuration erasure from **Restart & reconnect**, so
+  a reconnect failure no longer leaves erasure incorrectly displayed at 0%.
+- Keep failed recovery progress visible in In-Flight instead of returning
+  to a fresh destructive action form. Preserve the result across page reload.
+- Add explicit **Resume application staging only**, verifying the running
+  core digest, existing release trust, unprovisioned state and setup password
+  before uploading; no configuration erasure or core writes in this mode.
+- Confirm the selected OTA slot as well as core version before accepting a
+  restarted trial; same-version rollback cannot masquerade as success.
+- Clear stale recovery requests after successful application staging, and
+  disable caching of USB JavaScript assets.
+
 ## 2.8.5
 
 - Add **Actions / New / Clean USB recovery** using the browser computer's

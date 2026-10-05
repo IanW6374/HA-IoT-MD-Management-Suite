@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.8.5', addon)
+        self.assertIn('version: 2.8.6', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -96,6 +96,10 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('Inspect security', html)
         self.assertIn('Reset configuration', html)
         self.assertIn('Stage application', html)
+        self.assertIn('Restart & reconnect', html)
+        self.assertIn('name="resume" type="checkbox"', html)
+        self.assertIn("get('usb_job')", html)
+        self.assertIn('USB recovery result', html)
         self.assertIn('src="assets/usb_recovery.js"', html)
 
     def test_usb_workspace_and_local_assets_are_served_through_ingress(self):

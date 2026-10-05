@@ -91,3 +91,18 @@ class USBSeedTests(unittest.TestCase):
         self.assertFalse(result['startup_confirmed'])
         self.assertEqual(result['status'], 'complete')
         self.assertIn('device.usb_recovery', str(self.store.list_audit()))
+
+    def test_recovery_restart_has_its_own_milestone_with_legacy_jobs_preserved(self):
+        request = {'kind': 'recovery', 'image': 'core.iotcore', 'sha256': 'a' * 64,
+                   'application': 'app.iotapp', 'application_sha256': 'b' * 64,
+                   'confirmation': 'RECOVER', 'credential_retained': True,
+                   'erase_confirmed': True, 'milestone_count': 8, 'resume': True}
+        job = self.manager.start(request)
+        self.assertEqual(job['milestone_count'], 8)
+        self.assertTrue(job['resume'])
+        self.manager.update(job['id'], {'stage': 4, 'percent': 100})
+        with self.assertRaises(ValueError):
+            self.manager.update(job['id'], {'stage': 7, 'status': 'complete'})
+        result = self.manager.update(job['id'], {'stage': 8, 'status': 'complete'})
+        self.assertEqual(result['status'], 'complete')
+        self.assertEqual(USBSeedManager(self.store).snapshot()['jobs'][0]['milestone_count'], 8)
