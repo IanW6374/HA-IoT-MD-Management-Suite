@@ -31,7 +31,7 @@ test('only complete correctly hashed signed-format bundles are accepted', async 
 });
 function fakeREPL(core, fail = '', app = null) {
   const calls = [];
-  return {calls, async until(marker){calls.push('wait:'+marker);}, async enter(){calls.push('enter');}, async reboot(){calls.push('reboot');}, async reconnect(){calls.push('reconnect');}, async exec(source){
+  return {calls, async until(marker){calls.push('wait:'+marker); if(fail==='receipt') throw new Error('device rejected step'); if(marker==='\r\n') return JSON.stringify({status:'ready',core_version:core.manifest.version,application_version:app.manifest.version,application_sha256:app.sha256});}, async enter(){calls.push('enter');}, async reboot(){calls.push('reboot');}, async reconnect(){calls.push('reconnect');}, async exec(source){
     calls.push(source);
     if (fail && source.includes(fail)) throw new Error('device rejected step');
     if (source === recoveryPreflight) return JSON.stringify({device:'test-board',capacity:8192,target:'ota_1'});
@@ -77,7 +77,7 @@ test('readback mismatch never erases user state or requests reboot', async () =>
   assert.ok(!repl.calls.includes('reboot'));
 });
 test('application rejection cannot be reported as successful recovery', async () => {
-  const [core,app] = await bundles(), repl=fakeREPL(core,'.usb-recovery-result.json',app), stages=[];
+  const [core,app] = await bundles(), repl=fakeREPL(core,'receipt',app), stages=[];
   await assert.rejects(recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x',stage=>stages.push(stage)));
   assert.ok(!stages.includes(8));
 });
@@ -127,7 +127,7 @@ test('fatal UART failure reopens the same port once and clears stale failure', a
 
 test('completed erasure and restart failure are separate milestones', async () => {
   const [core,app] = await bundles(), repl=fakeREPL(core,'',app), stages=[];
-  repl.reconnect=async()=>{throw new Error('reconnect failed');};
+  repl.until=async()=>{throw new Error('boot receipt missing');};
   await assert.rejects(recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x',(stage,percent)=>stages.push([stage,percent])));
   assert.ok(stages.some(([stage,percent])=>stage===4&&percent===100));
   assert.deepEqual(stages.at(-1),[7,0]);
@@ -137,8 +137,7 @@ test('completed erasure and restart failure are separate milestones', async () =
 
 test('same-version rollback cannot pass the selected core confirmation', async () => {
   const [core,app] = await bundles(), repl=fakeREPL(core,'',app);
-  const original=repl.exec;
-  repl.exec=async source=>source.includes("open('.usb-recovery-result.json','r')")?JSON.stringify({status:'failed'}):original(source);
+  repl.until=async marker=>marker==='\r\n'?JSON.stringify({status:'failed'}):'';
   await assert.rejects(recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x',()=>{}));
   assert.ok(!repl.calls.some(source=>source.includes("open('.app-update.bundle'")));
 });
@@ -169,13 +168,14 @@ test('application readback mismatch leaves no committed handoff and never resets
   assert.ok(!repl.calls.some(source=>source.includes("print('handoff-ready')")));
 });
 
-test('passive boot completion precedes console reconnect and receipt inspection', async () => {
+test('passive boot receipt leaves first-run setup running without console interruption', async () => {
   const [core,app]=await bundles(), repl=fakeREPL(core,'',app);
   await recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x',()=>{});
   const index=text=>repl.calls.findIndex(source=>source.includes(text));
   assert.ok(index('reboot')<index('wait:USB-RECOVERY-RESULT'));
-  assert.ok(index('wait:USB-RECOVERY-RESULT')<index('reconnect'));
-  assert.ok(index('reconnect')<index("open('.usb-recovery-result.json','r')"));
+  assert.ok(index('wait:USB-RECOVERY-RESULT')<index('wait:\r\n'));
+  assert.ok(!repl.calls.includes('reconnect'));
+  assert.equal(repl.calls.filter(source=>source==='enter').length,1);
 });
 
 test('new-core resume transfers before its single reset without erasing or writing core', async () => {

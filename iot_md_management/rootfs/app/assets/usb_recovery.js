@@ -215,9 +215,9 @@ export async function recoverSecuredDevice(repl, core, application, password, pr
     await repl.reboot();
     // Never send Ctrl-C while the frozen core is validating/staging the bundle.
     // First wait passively for its durable-result marker, then inspect receipt.
-    await repl.until('USB-RECOVERY-RESULT\r\n', 180000);
-    await repl.reconnect();
-    const result = JSON.parse(await repl.exec("import json\n_file=open('.usb-recovery-result.json','r')\n_result=json.load(_file)\n_file.close()\nprint(json.dumps(_result))"));
+    await repl.until('USB-RECOVERY-RESULT ', 180000);
+    const result = JSON.parse(await repl.until('\r\n', 15000));
+    // Do not enter REPL again: that would stop the first-run setup hotspot.
     if (result.status !== 'ready' || result.core_version !== core.manifest.version || result.application_sha256 !== application.sha256 || result.application_version !== application.manifest.version) throw new Error('New core did not confirm application staging. Resume the recovery; do not factory-flash this secured board.');
     progress(8, 100, 'New core verified and application staged after one reset. Setup hotspot is not independently confirmed. Use the retained password file.');
     return board.device;
