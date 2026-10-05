@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.8.11', addon)
+        self.assertIn('version: 2.8.12', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -190,8 +190,76 @@ for (const status of ['complete','running']) {
         self.assertIn('immutable device identity', self.module.HTML)
         self.assertIn('Retry connection', self.module.HTML)
         self.assertIn("button.textContent='Retrying…'", self.module.HTML)
-        self.assertIn("?'Retry failed':'Connected'", self.module.HTML)
+        self.assertIn('device-status-actions', self.module.HTML)
+        self.assertIn('class="badge device-retry', self.module.HTML)
         self.assertIn('>Remove</button>', self.module.HTML)
+
+    def test_device_retry_badge_survives_refresh_and_updates_status_immediately(self):
+        runtime = shutil.which('node')
+        if not runtime:
+            self.skipTest('Node.js is required for device retry validation')
+        script = self.module.HTML.split('<script>', 1)[1].split('</script>', 1)[0]
+        functions = '\n'.join(
+            line for line in script.splitlines()
+            if line.startswith(('function deviceConnectionBadges(',
+                                'function renderDevices(', 'async function pollDevice('))
+        )
+        check = subprocess.run([runtime, '-e', '''
+const assert = require('node:assert/strict');
+const deviceRetries = new Map(), box = {innerHTML:''};
+const device = {id:'IoT-MD-001',name:'Boiler',enabled:true,host:'iot-md-001.local',port:8444,last_error:'TLS handshake timed out'};
+const state = {devices:[device]};
+const document = {getElementById:()=>box};
+const esc = value => String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
+const deviceSchedule=()=>'', when=()=>'', deviceBackupPanels=()=>'';
+const replacePreservingDetails = (node,html) => node.innerHTML=html;
+let metrics=0, calls=0, finish;
+const renderMetrics=()=>metrics++;
+let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
+''' + functions + '''
+(async()=>{
+  renderDevices();
+  const header=box.innerHTML.split('<div class="device-sections">')[0];
+  assert.match(header, /device-status-actions/);
+  assert.match(header, /Unavailable/);
+  assert.match(header, /class="badge device-retry/);
+  assert.equal(box.innerHTML.split('device-retry').length-1,1);
+  assert.ok(!box.innerHTML.split('<div class="device-sections">')[1].includes('Retry connection'));
+  const button = {};
+  const pending = pollDevice(device.id,button);
+  assert.equal(calls,1);
+  assert.equal(button.disabled,true);
+  renderDevices(); // Same refresh used by the periodic data reload.
+  assert.match(box.innerHTML,/aria-busy="true" disabled>Retrying/);
+  await pollDevice(device.id,{});
+  assert.equal(calls,1); // No duplicate request when cards are replaced.
+  finish({device:{...device,last_error:'',last_seen:123}});
+  await pending;
+  assert.equal(state.devices[0].last_seen,123);
+  assert.match(box.innerHTML,/Healthy/);
+  assert.ok(!box.innerHTML.includes('Retrying'));
+  assert.ok(!box.innerHTML.includes('device-connection-error'));
+  assert.equal(deviceRetries.size,0);
+  assert.equal(metrics,1);
+  const failed=pollDevice(device.id,{});
+  finish({device:{...device,last_error:'Device still unavailable'}});
+  await failed;
+  assert.match(box.innerHTML,/Unavailable/);
+  assert.match(box.innerHTML,/Device still unavailable/);
+  assert.equal(deviceRetries.size,0);
+  api=async()=>{throw new Error('<server error>')};
+  await pollDevice(device.id,{});
+  assert.match(box.innerHTML,/Retry failed/);
+  assert.match(box.innerHTML,/title="&lt;server error>/);
+  assert.ok(!box.innerHTML.includes('aria-busy="true"'));
+  assert.equal(deviceRetries.get(device.id).pending,false);
+  device.enabled=false;
+  state.devices=[device];
+  assert.match(deviceConnectionBadges(device),/Enable management before retrying/);
+  assert.match(deviceConnectionBadges(device),/disabled/);
+})().catch(error=>{console.error(error);process.exitCode=1});
+'''], capture_output=True, text=True)
+        self.assertEqual(check.returncode, 0, check.stderr)
 
     def test_device_api_identity_is_core_addon_configuration(self):
         root = Path(__file__).resolve().parents[1]
@@ -229,6 +297,25 @@ for (const status of ['complete','running']) {
 
         self.assertIn('client certificate is enrolled', detail)
         self.assertIn('read scope', detail)
+
+    def test_tls_handshake_timeout_is_not_reported_as_a_permission_failure(self):
+        import ssl
+        import urllib.error
+        from fleet_service import device_connection_error
+
+        reason = TimeoutError('_ssl.c:1015: The handshake operation timed out')
+        for error in (reason, urllib.error.URLError(reason)):
+            detail = device_connection_error(error)
+            self.assertIn('TLS handshake timed out', detail)
+            self.assertIn('before an HTTP response', detail)
+            self.assertIn('not an API permission rejection', detail)
+            self.assertNotIn('_ssl.c', detail)
+        self.assertNotIn('TLS handshake timed out', device_connection_error(
+            urllib.error.URLError(TimeoutError('The read operation timed out'))
+        ))
+        self.assertIn('certificate verification failed', device_connection_error(
+            ssl.SSLCertVerificationError('certificate expired')
+        ))
 
     def test_policy_targets_discovered_immutable_device_identity(self):
         from fleet_service import FleetController

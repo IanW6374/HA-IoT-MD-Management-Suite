@@ -8,6 +8,7 @@ import os
 import secrets
 import ssl
 import time
+import urllib.error
 import urllib.request
 
 
@@ -58,6 +59,13 @@ def maintenance_window(request):
 
 
 def device_connection_error(exc):
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(reason, TimeoutError) and 'handshake' in str(reason).lower():
+        return (
+            'Device TLS handshake timed out before an HTTP response. '
+            'The device may be busy or its TLS service unresponsive; '
+            'this is not an API permission rejection.'
+        )
     if isinstance(exc, http.client.RemoteDisconnected):
         return (
             'Device closed the connection before an HTTP response. Verify that '

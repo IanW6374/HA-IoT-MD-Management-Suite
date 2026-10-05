@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+## 2.8.12
+
+- Move device Retry connection into a compact action badge beside the health
+  status, outside Device settings. Keep pending retries disabled through live
+  refreshes, prevent duplicate clicks, and apply returned device status immediately.
+- Explain TLS handshake timeouts without exposing Python SSL source locations or
+  misidentifying them as API permission failures. This clarifies the error; it
+  does not change device trust, retry requests automatically or restart devices.
+
 ## 2.8.11
 
 - Use MicroPython's receiver-controlled raw-paste protocol for USB recovery,
