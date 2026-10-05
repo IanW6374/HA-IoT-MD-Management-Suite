@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.8.8
+
+- Read the core staging receipt passively from boot output. Do not re-enter the
+  USB console after reset, which would interrupt first-run setup and stop the
+  setup hotspot. Retain one reset and matching core/application verification.
+
 ## 2.8.7
 
 - Transfer both signed core and application before a single reset during clean
