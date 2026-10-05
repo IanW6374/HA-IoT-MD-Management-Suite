@@ -69,7 +69,8 @@ class USBSeedManager:
                    'detail': 'Signed bundles validated locally. Inspecting the secured UART device.' if recovery else 'Factory image validated locally. Inspecting the USB board.'}
             if recovery:
                 job.update(application=application, application_sha256=application_digest,
-                           milestone_count=milestone_count, resume=request.get('resume') is True)
+                           milestone_count=milestone_count, resume=request.get('resume') is True,
+                           handoff_version=1 if request.get('handoff_version') == 1 else 0)
             self.jobs.append(job)
             self.jobs = self.jobs[-100:]
             self._save()

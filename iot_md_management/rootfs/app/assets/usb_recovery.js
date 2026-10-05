@@ -169,6 +169,8 @@ _remove_tree('/')
 print('recovery-ready')`;
 
 export async function recoverSecuredDevice(repl, core, application, password, progress, resume = false) {
+  const handoff = Number(core.manifest.release_sequence) >= 2802;
+  if (!handoff && !resume) throw new Error('Single-reset recovery requires Alpha 97 or newer signed core. Use the new core bundle, or explicitly resume an existing Alpha 96 recovery.');
   await repl.enter();
   const board = JSON.parse(await repl.exec(recoveryPreflight));
   if (!Number.isSafeInteger(board.capacity) || board.capacity < Math.ceil(core.payload.length / 4096) * 4096) throw new Error('The signed core does not fit the inactive OTA partition.');
@@ -189,6 +191,37 @@ export async function recoverSecuredDevice(repl, core, application, password, pr
   const actual = await repl.exec(`_hash=uhashlib.sha256()\n_buf=bytearray(4096)\nfor _block in range(${padded.length / 4096}):\n _target.readblocks(_block,_buf)\n _hash.update(_buf)\n _wdt.feed()\nprint(ubinascii.hexlify(_hash.digest()).decode())`, 120000);
   if (actual !== await digest(padded)) throw new Error('Installed core verification failed. User configuration has not been erased.');
   progress(3, 100, 'Core partition verified.');
+  if (handoff) {
+    if (!resume) {
+      await repl.exec('_target.set_boot()\n_wdt.feed()');
+      progress(4, 0, 'Erasing configuration before transferring the application.');
+      await repl.exec(`_password=ubinascii.unhexlify('${hex(encoder.encode(password))}')\nimport credential_security\ncredential_security.validate_password_strength(_password.decode())`);
+      if (await repl.exec(eraseRecoveryState, 120000) !== 'recovery-ready') throw new Error('Configuration reset acknowledgement was not received. Inspect the device before retrying.');
+    }
+    progress(4, 100, resume ? 'Retaining unprovisioned setup; no configuration erasure.' : 'Configuration erasure confirmed.');
+    progress(5, 0, 'Uploading application before reset. Keep USB connected.');
+    await repl.exec("_file=open('.app-update.bundle.upload','wb')");
+    for (let offset = 0; offset < application.bytes.length; offset += 512) {
+      await repl.exec(`_file.write(ubinascii.unhexlify('${hex(application.bytes.slice(offset, offset + 512))}'))\n_wdt.feed()`);
+      progress(5, Math.min(99, Math.floor((offset + 512) / application.bytes.length * 100)), 'Uploading application before reset.');
+    }
+    const transferred = await repl.exec("_file.close()\n_hash=uhashlib.sha256()\n_file=open('.app-update.bundle.upload','rb')\nwhile True:\n _chunk=_file.read(4096)\n if not _chunk:break\n _hash.update(_chunk)\n _wdt.feed()\n_file.close()\nprint(ubinascii.hexlify(_hash.digest()).decode())", 120000);
+    if (transferred !== application.sha256) throw new Error('Application readback verification failed; no recovery handoff committed.');
+    progress(5, 100, 'Application transfer verified.');
+    const marker = {format_version:1, core_version:core.manifest.version, partition:resume ? undefined : board.target, application_size:application.bytes.length, application_sha256:application.sha256};
+    await repl.exec(`import uos as os\n_marker=json.loads(${pyString(JSON.stringify(marker))})\n${resume ? "_marker['partition']=_running.info()[4]\n" : ''}try:os.remove('.usb-recovery.json')\nexcept OSError:pass\ntry:os.remove('.usb-recovery-result.json')\nexcept OSError:pass\ntry:os.remove('.app-update.bundle')\nexcept OSError:pass\nos.rename('.app-update.bundle.upload','.app-update.bundle')\n_file=open('.usb-recovery.json.tmp','w')\njson.dump(_marker,_file)\n_file.close()\nos.rename('.usb-recovery.json.tmp','.usb-recovery.json')\nprint('handoff-ready')`).then(result => {if (result !== 'handoff-ready') throw new Error('Recovery handoff acknowledgement missing.');});
+    progress(6, 100, 'Core and application transferred; boot validation pending.');
+    progress(7, 0, 'Resetting once; waiting for core-owned application validation.');
+    await repl.reboot();
+    // Never send Ctrl-C while the frozen core is validating/staging the bundle.
+    // First wait passively for its durable-result marker, then inspect receipt.
+    await repl.until('USB-RECOVERY-RESULT\r\n', 180000);
+    await repl.reconnect();
+    const result = JSON.parse(await repl.exec("import json\n_file=open('.usb-recovery-result.json','r')\n_result=json.load(_file)\n_file.close()\nprint(json.dumps(_result))"));
+    if (result.status !== 'ready' || result.core_version !== core.manifest.version || result.application_sha256 !== application.sha256 || result.application_version !== application.manifest.version) throw new Error('New core did not confirm application staging. Resume the recovery; do not factory-flash this secured board.');
+    progress(8, 100, 'New core verified and application staged after one reset. Setup hotspot is not independently confirmed. Use the retained password file.');
+    return board.device;
+  }
   if (!resume) {
     // ESP-IDF validates the secure-boot image before configuration erasure.
     await repl.exec('_target.set_boot()\n_wdt.feed()');
@@ -256,7 +289,7 @@ function initializeRecovery() {
       const password = (await form.elements.password_file.files[0].text()).trim();
       if (!/^[\x21-\x7e]{16,63}$/.test(password) || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password)) throw new Error('Choose the retained strong setup-password file (16–63 printable characters).');
       const resume = form.elements.resume.checked;
-      job = await window.api('api/seed', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({kind:'recovery', milestone_count:8, resume, image:core.filename, application:application.filename, sha256:core.sha256, application_sha256:application.sha256, confirmation:form.elements.confirmation.value, credential_retained:form.elements.credential_retained.checked, erase_confirmed:form.elements.erase_confirmed.checked})});
+      job = await window.api('api/seed', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({kind:'recovery', milestone_count:8, handoff_version:Number(core.manifest.release_sequence)>=2802?1:0, resume, image:core.filename, application:application.filename, sha256:core.sha256, application_sha256:application.sha256, confirmation:form.elements.confirmation.value, credential_retained:form.elements.credential_retained.checked, erase_confirmed:form.elements.erase_confirmed.checked})});
       window.setActionView('inflight', true);
       const query = new URLSearchParams(location.search); query.set('usb_job', job.id);
       history.replaceState({}, '', `actions?${query.toString()}`);

@@ -88,12 +88,15 @@ reads back the inactive encrypted core partition, validates its secure-boot
 image, then erases user settings, credentials, certificates, application
 files and logs. The hardware security keys, encrypted-NVS key material and
 release verification identity are preserved. It verifies the new running
-core, stages the signed application and requests first-run startup. Keep
+core and stages the signed application on boot. Alpha 97 or newer core is
+required for clean recovery: both bundles are transferred and read back
+before a single reset. The new frozen core validates the application and
+returns a matching staging receipt before the browser reports completion. Keep
 power and this tab connected throughout. Complete setup using the retained
 password file and restore the encrypted backup if required.
 
 Eight live milestones appear in **Actions > In-Flight**, with configuration
-reset and **Restart & reconnect** reported separately. Failed progress stays
+reset, application transfer, handoff and boot validation reported separately. Failed progress stays
 visible there and survives page reload; the final
 record in **Activity > USB operations**. Completion does not independently
 confirm the hotspot; check for `IoT-MD-Setup` yourself. Image bytes, password

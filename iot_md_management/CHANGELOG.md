@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.8.7
+
+- Transfer both signed core and application before a single reset during clean
+  USB recovery with Alpha 97 or newer core. The frozen core validates and stages
+  the waiting application on boot; completion requires its matching receipt.
+- Verify application readback and commit an atomic handoff only after the full
+  upload. Interrupted transfers cannot execute or report success.
+- Preserve non-erasing Alpha 96 resume and historical progress compatibility.
+
 ## 2.8.6
 
 - Recover browser serial readers after non-fatal framing errors; reopen a

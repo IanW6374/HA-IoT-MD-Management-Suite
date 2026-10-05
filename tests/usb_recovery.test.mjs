@@ -11,9 +11,9 @@ function pack(type, manifest, payload) {
   size.writeUInt32BE(header.length);
   return new Uint8Array(Buffer.concat([Buffer.from(type === 'iotcore' ? 'IOTC1\n' : 'IOTA1\n'), size, header, payload]));
 }
-async function bundles() {
+async function bundles(legacy = false) {
   const payload = Buffer.alloc(4096, 255); payload[0] = 0xe9;
-  const coreBytes = pack('iotcore', {...base, size:payload.length, sha256:await sha(payload)}, payload);
+  const coreBytes = pack('iotcore', {...base, release_sequence:legacy?2801:2802, size:payload.length, sha256:await sha(payload)}, payload);
   const appPayload = Buffer.from('appsettings');
   const appBytes = pack('iotapp', {...base, files:[{path:'iotmd.py',size:3,sha256:await sha(appPayload.subarray(0,3))},{path:'app_settings.json',size:8,sha256:await sha(appPayload.subarray(3))}]}, appPayload);
   return [await readRecoveryBundle(coreBytes,'core.iotcore','iotcore'), await readRecoveryBundle(appBytes,'application.iotapp','iotapp')];
@@ -29,26 +29,32 @@ test('only complete correctly hashed signed-format bundles are accepted', async 
   await assert.rejects(readRecoveryBundle(pack('iotapp',bad,app.payload),'app.iotapp','iotapp'),/invalid/);
   await assert.rejects(readRecoveryBundle(pack('iotapp',{...app.manifest,files:[]},app.payload),'app.iotapp','iotapp'),/complete/);
 });
-function fakeREPL(core, fail = '') {
+function fakeREPL(core, fail = '', app = null) {
   const calls = [];
-  return {calls, async enter(){calls.push('enter');}, async reboot(){calls.push('reboot');}, async reconnect(){calls.push('reconnect');}, async exec(source){
+  return {calls, async until(marker){calls.push('wait:'+marker);}, async enter(){calls.push('enter');}, async reboot(){calls.push('reboot');}, async reconnect(){calls.push('reconnect');}, async exec(source){
     calls.push(source);
     if (fail && source.includes(fail)) throw new Error('device rejected step');
     if (source === recoveryPreflight) return JSON.stringify({device:'test-board',capacity:8192,target:'ota_1'});
+    if (source.includes("open('.app-update.bundle.upload','rb')")) return app.sha256;
     if (source.includes('_hash=uhashlib')) return sha(core.payload);
+    if (source.includes("print('handoff-ready')")) return 'handoff-ready';
+    if (source.includes("open('.usb-recovery-result.json','r')")) return JSON.stringify({status:'ready',core_version:core.manifest.version,application_version:app.manifest.version,application_sha256:app.sha256});
     if (source === eraseRecoveryState) return 'recovery-ready';
     return '';
   }};
 }
 test('security, signatures and partition verification precede state erasure', async () => {
-  const [core,app] = await bundles(), repl = fakeREPL(core), stages=[];
+  const [core,app] = await bundles(), repl = fakeREPL(core,'',app), stages=[];
   await recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x', (stage,percent,detail)=>stages.push({stage,percent,detail}));
   const index = text => repl.calls.findIndex(source => source.includes(text));
   assert.ok(index('secure_boot') < index('writeblocks'));
   assert.ok(index('verify_manifest_signature') < index('writeblocks'));
   assert.ok(index('_hash=uhashlib') < index('_remove_tree'));
   assert.ok(index('_target.set_boot()') < index('_remove_tree'));
-  assert.ok(index('mark_app_valid_cancel_rollback') < index('stage_bundle'));
+  assert.ok(index('.usb-recovery.json.tmp') < index('reboot'));
+  assert.ok(index("open('.app-update.bundle.upload','wb')") < index('reboot'));
+  assert.equal(repl.calls.filter(source=>source==='reboot').length,1);
+  assert.ok(!repl.calls.some(source=>source.includes('stage_bundle')));
   assert.equal(stages.at(-1).stage,8);
   assert.match(stages.at(-1).detail,/not independently confirmed/);
   assert.doesNotMatch(eraseRecoveryState,/erase_key\('verifykey'\)|erase_flash|flash_erase/);
@@ -71,14 +77,14 @@ test('readback mismatch never erases user state or requests reboot', async () =>
   assert.ok(!repl.calls.includes('reboot'));
 });
 test('application rejection cannot be reported as successful recovery', async () => {
-  const [core,app] = await bundles(), repl=fakeREPL(core,'stage_bundle'), stages=[];
+  const [core,app] = await bundles(), repl=fakeREPL(core,'.usb-recovery-result.json',app), stages=[];
   await assert.rejects(recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x',stage=>stages.push(stage)));
   assert.ok(!stages.includes(8));
 });
 test('device Python snippets compile without execution', async () => {
-  const [core,app] = await bundles(), repl=fakeREPL(core);
+  const [core,app] = await bundles(), repl=fakeREPL(core,'',app);
   await recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x',()=>{});
-  const sources=repl.calls.filter(source=>!['enter','reboot','reconnect'].includes(source));
+  const sources=repl.calls.filter(source=>!['enter','reboot','reconnect'].includes(source)&&!source.startsWith('wait:'));
   sources.push(verifyRecoveryManifests(core.manifest,app.manifest));
   const result=spawnSync('python3',['-c','import json,sys\nfor s in json.load(sys.stdin): compile(s,"recovery","exec")'],{input:JSON.stringify(sources),encoding:'utf8'});
   assert.equal(result.status,0,result.stderr);
@@ -120,23 +126,25 @@ test('fatal UART failure reopens the same port once and clears stale failure', a
 });
 
 test('completed erasure and restart failure are separate milestones', async () => {
-  const [core,app] = await bundles(), repl=fakeREPL(core), stages=[];
+  const [core,app] = await bundles(), repl=fakeREPL(core,'',app), stages=[];
   repl.reconnect=async()=>{throw new Error('reconnect failed');};
   await assert.rejects(recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x',(stage,percent)=>stages.push([stage,percent])));
   assert.ok(stages.some(([stage,percent])=>stage===4&&percent===100));
-  assert.deepEqual(stages.at(-1),[5,0]);
-  assert.ok(!stages.some(([stage])=>stage===6));
+  assert.deepEqual(stages.at(-1),[7,0]);
+  assert.ok(stages.some(([stage,percent])=>stage===5&&percent===100));
   assert.equal(repl.calls.filter(source=>source.includes('_remove_tree')).length,1);
 });
 
 test('same-version rollback cannot pass the selected core confirmation', async () => {
-  const [core,app] = await bundles(), repl=fakeREPL(core,"info()[4]==\"ota_1\"");
+  const [core,app] = await bundles(), repl=fakeREPL(core,'',app);
+  const original=repl.exec;
+  repl.exec=async source=>source.includes("open('.usb-recovery-result.json','r')")?JSON.stringify({status:'failed'}):original(source);
   await assert.rejects(recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x',()=>{}));
   assert.ok(!repl.calls.some(source=>source.includes("open('.app-update.bundle'")));
 });
 
 test('explicit resume verifies running core and password without erasure or core writes', async () => {
-  const [core,app]=await bundles(), repl=fakeREPL(core), stages=[];
+  const [core,app]=await bundles(true), repl=fakeREPL(core), stages=[];
   await recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x',stage=>stages.push(stage),true);
   assert.ok(repl.calls.some(source=>source.includes('_target=_running')));
   assert.ok(repl.calls.some(source=>source.includes('bootstrap_key()==')));
@@ -148,7 +156,37 @@ test('explicit resume verifies running core and password without erasure or core
 });
 
 test('resume refuses provisioned devices or mismatched credentials before upload', async () => {
-  const [core,app]=await bundles(), repl=fakeREPL(core,'bootstrap_key()==');
+  const [core,app]=await bundles(true), repl=fakeREPL(core,'bootstrap_key()==');
   await assert.rejects(recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x',()=>{},true));
   assert.ok(!repl.calls.some(source=>source.includes("open('.app-update.bundle'")));
+});
+
+test('application readback mismatch leaves no committed handoff and never resets', async () => {
+  const [core,app]=await bundles(), repl=fakeREPL(core,'',app), original=repl.exec;
+  repl.exec=async source=>source.includes("open('.app-update.bundle.upload','rb')")?'wrong':original(source);
+  await assert.rejects(recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x',()=>{}),/readback/);
+  assert.ok(!repl.calls.includes('reboot'));
+  assert.ok(!repl.calls.some(source=>source.includes("print('handoff-ready')")));
+});
+
+test('passive boot completion precedes console reconnect and receipt inspection', async () => {
+  const [core,app]=await bundles(), repl=fakeREPL(core,'',app);
+  await recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x',()=>{});
+  const index=text=>repl.calls.findIndex(source=>source.includes(text));
+  assert.ok(index('reboot')<index('wait:USB-RECOVERY-RESULT'));
+  assert.ok(index('wait:USB-RECOVERY-RESULT')<index('reconnect'));
+  assert.ok(index('reconnect')<index("open('.usb-recovery-result.json','r')"));
+});
+
+test('new-core resume transfers before its single reset without erasing or writing core', async () => {
+  const [core,app]=await bundles(), repl=fakeREPL(core,'',app);
+  await recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x',()=>{},true);
+  assert.ok(!repl.calls.some(source=>/writeblocks|_remove_tree|_target.set_boot/.test(source)));
+  assert.equal(repl.calls.filter(source=>source==='reboot').length,1);
+});
+
+test('old signed core is refused before USB mutations unless explicitly resuming', async () => {
+  const [core,app]=await bundles(true), repl=fakeREPL(core);
+  await assert.rejects(recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x',()=>{}),/Alpha 97/);
+  assert.deepEqual(repl.calls,[]);
 });
