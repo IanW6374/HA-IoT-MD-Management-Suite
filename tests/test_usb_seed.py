@@ -46,6 +46,15 @@ class USBSeedTests(unittest.TestCase):
         result = self.manager.update(job['id'], {'stage': 5, 'status': 'complete'})
         self.assertEqual(result['status'], 'complete')
 
+    def test_explicit_unknown_confirmation_is_persisted_and_can_be_resolved(self):
+        job = self.start()
+        result = self.manager.update(job['id'], {
+            'stage': 4, 'status': 'interrupted', 'detail': 'Device confirmation unavailable; outcome unknown.'})
+        self.assertEqual(result['status'], 'interrupted')
+        self.assertEqual(USBSeedManager(self.store).snapshot()['jobs'][0]['status'], 'interrupted')
+        self.assertIn('interrupted', str(self.store.list_audit()))
+        self.assertEqual(self.manager.update(job['id'], {'stage': 5, 'status': 'complete'})['status'], 'complete')
+
     def test_password_and_image_bytes_are_not_retained(self):
         self.manager.start({'image': 'iot-md.factory.bin', 'sha256': 'a' * 64,
                             'confirmation': 'SEED', 'credential_retained': True,

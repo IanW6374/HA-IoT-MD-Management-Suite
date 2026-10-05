@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.8.9
+
+- Treat console disappearance during recovery reset as a reconnectable event,
+  reopening only the exact user-selected port while waiting for boot validation.
+- If the one-time boot message was missed, inspect the saved Alpha 97 receipt
+  after the boot-validation timeout. Require the same device, core, OTA slot,
+  application digest and complete staged state before reporting success.
+- Restart first-run setup after fallback inspection; never replay core writes,
+  application uploads or configuration erasure during confirmation.
+- Show an unavailable final confirmation as interrupted/unknown, not proof of
+  a failed device recovery. Keep failed validation distinct from transport loss.
+
 ## 2.8.8
 
 - Read the core staging receipt passively from boot output. Do not re-enter the

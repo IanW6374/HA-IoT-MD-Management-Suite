@@ -43,6 +43,7 @@ export class RecoveryREPL {
     await this.port.open({baudRate: 115200});
     await this.port.setSignals({dataTerminalReady: false, requestToSend: false});
     this.writer = this.port.writable.getWriter();
+    this.isOpen = true;
     this.reading = (async () => {
       // Web Serial replaces readable after recoverable framing/parity errors.
       // Release the failed reader and acquire the replacement stream instead
@@ -65,7 +66,7 @@ export class RecoveryREPL {
         }
         if (!this.closed) await delay(25);
       }
-      if (!this.closed) this.readError = new Error('UART disconnected during recovery.');
+      if (!this.closed) this.readError = Object.assign(new Error('UART disconnected during recovery.'), {code:'UART_DISCONNECTED'});
     })();
   }
   async write(value) { await this.writer.write(typeof value === 'string' ? encoder.encode(value) : value); }
@@ -77,7 +78,7 @@ export class RecoveryREPL {
       if (this.readError) throw this.readError;
       await delay(10);
     }
-    throw new Error('UART response timed out. Select the UART interface with firmware running, not JTAG or ROM download mode.');
+    throw Object.assign(new Error('UART response timed out. Select the UART interface with firmware running, not JTAG or ROM download mode.'), {code:'UART_TIMEOUT'});
   }
   async enter(timeout = 15000) {
     this.buffer = '';
@@ -122,8 +123,20 @@ export class RecoveryREPL {
     }
     throw new Error('UART reconnect failed after configuration reset. The core may already be in first-run setup. Use Resume application staging only after reconnecting UART; do not factory-flash this secured board.');
   }
+  async reopenAfterReset(timeout = 15000) {
+    // Reuse only the exact user-selected SerialPort. Never pick another USB
+    // device or manipulate BOOT/EN to recover a disappearing console.
+    await this.close();
+    const deadline = Date.now() + timeout;
+    do {
+      try { await this.open(); return; }
+      catch (_) { await this.close(); await delay(500); }
+    } while (Date.now() < deadline);
+    throw Object.assign(new Error('The selected UART has not returned after reset. Recovery may already be complete; keep power connected and verify its saved result. Do not erase or factory-flash again.'), {code:'UART_DISCONNECTED'});
+  }
   async close() {
     this.closed = true;
+    this.isOpen = false;
     try { await this.reader?.cancel(); } catch (_) {}
     await this.reading;
     this.reader = null; this.writer?.releaseLock(); this.writer = null;
@@ -140,7 +153,62 @@ _target=_running.get_next_update()
 assert _target is not None
 _wdt=machine.WDT(0)
 _wdt.feed()
-print(json.dumps({'device':ubinascii.hexlify(machine.unique_id()).decode(),'capacity':_target.info()[3],'target':_target.info()[4]}))`;
+print(json.dumps({'device':ubinascii.hexlify(machine.unique_id()).decode(),'capacity':_target.info()[3],'target':_target.info()[4],'running':_running.info()[4]}))`;
+
+export const recoveryResultProbe = `import machine, ubinascii, ujson as json, credential_store, core_metadata, esp32, app_update
+try:
+ with open('.usb-recovery-result.json','r') as stream:
+  _receipt=json.load(stream)
+except (OSError, ValueError):
+ _receipt={}
+_state=app_update.update_status()
+print(json.dumps({'device':ubinascii.hexlify(machine.unique_id()).decode(),'core_version':core_metadata.CORE_FIRMWARE_VERSION,'partition':esp32.Partition(esp32.Partition.RUNNING).info()[4],'provisioned':credential_store.is_provisioned(),'receipt':_receipt,'application_status':_state.get('status'),'application_version':_state.get('version'),'has_application':_state.get('has_application'),'selected_paths':_state.get('selected_paths',[])}))`;
+
+export function validateRecoveryReceipt(result, expected) {
+  if (!result || result.status !== 'ready' || result.core_version !== expected.coreVersion || result.application_sha256 !== expected.applicationSHA256 || result.application_version !== expected.applicationVersion) {
+    throw new Error('New core did not confirm the selected application staging. Inspect the device result; do not erase or factory-flash this secured board.');
+  }
+}
+
+export async function confirmRecoveryAfterReset(repl, expected, progress, timeout = 180000) {
+  const deadline = Date.now() + timeout;
+  let receipt;
+  try {
+    try { await repl.until('USB-RECOVERY-RESULT ', Math.max(1, deadline-Date.now())); }
+    catch (error) {
+      if (error.code !== 'UART_DISCONNECTED') throw error;
+      progress(7, 0, 'USB reset disconnected the console. Reconnecting the selected UART; no erase or upload will be repeated.');
+      await repl.reopenAfterReset();
+      progress(7, 0, 'UART reconnected. Waiting for boot validation (up to three minutes); a missed message will be checked against the saved device result.');
+      await repl.until('USB-RECOVERY-RESULT ', Math.max(1, deadline-Date.now()));
+    }
+    receipt = JSON.parse(await repl.until('\r\n', 15000));
+  } catch (error) {
+    if (!['UART_DISCONNECTED','UART_TIMEOUT'].includes(error.code)) throw error;
+    // Allow the complete boot-validation budget before Ctrl-C. The receipt
+    // may have been emitted while USB was absent; it is also stored durably.
+    const remaining = deadline-Date.now();
+    if (remaining > 0) await delay(remaining);
+    progress(7, 0, 'Boot message was missed. Checking the saved device result, without repeating recovery. Setup will restart after this check.');
+    if (repl.readError || repl.isOpen === false) await repl.reopenAfterReset();
+    await repl.enter();
+    let restartSetup = false;
+    try {
+      const saved = JSON.parse(await repl.exec(recoveryResultProbe));
+      if (saved.device !== expected.device) throw new Error('The reconnected UART is not the original device. No further device commands will be sent.');
+      restartSetup = saved.provisioned === false;
+      if (!restartSetup) throw new Error('The device is already configured. Check its portal; first-run setup will not be restarted.');
+      if (saved.core_version !== expected.coreVersion || saved.partition !== expected.partition || saved.application_status !== 'ready' || saved.application_version !== expected.applicationVersion || saved.has_application !== true || !saved.selected_paths?.includes('iotmd.py') || !saved.selected_paths?.includes('app_settings.json')) throw new Error('Saved recovery state does not match the selected core and staged application. Do not erase or factory-flash again.');
+      receipt = saved.receipt;
+      validateRecoveryReceipt(receipt, expected);
+    } finally {
+      // Only the original, unprovisioned device is restarted. This restores
+      // the setup wizard interrupted by inspection, not the recovery writes.
+      if (restartSetup) await repl.reboot();
+    }
+  }
+  validateRecoveryReceipt(receipt, expected);
+}
 
 export function verifyRecoveryManifests(core, application) {
   return `_core=json.loads(${pyString(JSON.stringify(core))})\n_app=json.loads(${pyString(JSON.stringify(application))})\nupdate_security.validate_manifest('iotcore',_core)\n_key=update_security._public_key()\nassert _key is not None\n_verification=_key[0].to_bytes(32,'big')+_key[1].to_bytes(32,'big')\nassert _app['signature_scheme']==update_security.SIGNATURE_SCHEME\nassert update_security.verify_manifest_signature('iotapp',_app,_app['signature'],_key)\nimport app_update\nfor _entry in _app['files']:\n _path=app_update._safe_path(_entry['path'])\n assert not app_update.is_protected_path(_path)\n_wdt.feed()\nprint('signatures-verified')`;
@@ -211,15 +279,12 @@ export async function recoverSecuredDevice(repl, core, application, password, pr
     const marker = {format_version:1, core_version:core.manifest.version, partition:resume ? undefined : board.target, application_size:application.bytes.length, application_sha256:application.sha256};
     await repl.exec(`import uos as os\n_marker=json.loads(${pyString(JSON.stringify(marker))})\n${resume ? "_marker['partition']=_running.info()[4]\n" : ''}try:os.remove('.usb-recovery.json')\nexcept OSError:pass\ntry:os.remove('.usb-recovery-result.json')\nexcept OSError:pass\ntry:os.remove('.app-update.bundle')\nexcept OSError:pass\nos.rename('.app-update.bundle.upload','.app-update.bundle')\n_file=open('.usb-recovery.json.tmp','w')\njson.dump(_marker,_file)\n_file.close()\nos.rename('.usb-recovery.json.tmp','.usb-recovery.json')\nprint('handoff-ready')`).then(result => {if (result !== 'handoff-ready') throw new Error('Recovery handoff acknowledgement missing.');});
     progress(6, 100, 'Core and application transferred; boot validation pending.');
-    progress(7, 0, 'Resetting once; waiting for core-owned application validation.');
+    progress(7, 0, 'Resetting once; waiting for core-owned application validation (up to three minutes).');
     await repl.reboot();
     // Never send Ctrl-C while the frozen core is validating/staging the bundle.
     // First wait passively for its durable-result marker, then inspect receipt.
-    await repl.until('USB-RECOVERY-RESULT ', 180000);
-    const result = JSON.parse(await repl.until('\r\n', 15000));
-    // Do not enter REPL again: that would stop the first-run setup hotspot.
-    if (result.status !== 'ready' || result.core_version !== core.manifest.version || result.application_sha256 !== application.sha256 || result.application_version !== application.manifest.version) throw new Error('New core did not confirm application staging. Resume the recovery; do not factory-flash this secured board.');
-    progress(8, 100, 'New core verified and application staged after one reset. Setup hotspot is not independently confirmed. Use the retained password file.');
+    await confirmRecoveryAfterReset(repl, {device:board.device, partition:resume?board.running:board.target, coreVersion:core.manifest.version, applicationVersion:application.manifest.version, applicationSHA256:application.sha256}, progress);
+    progress(8, 100, 'New core verified and application staging confirmed. Setup hotspot is not independently confirmed. Use the retained password file.');
     return board.device;
   }
   if (!resume) {
@@ -308,7 +373,9 @@ function initializeRecovery() {
       status.className = 'status error'; status.textContent = error.message;
       if (error.name === 'SecurityError' && availability.ready && window.top !== window) workspace.classList.remove('hidden');
       if (job) {
-        job.status = 'failed'; job.detail = error.message;
+        const unconfirmed = job.stage >= 7 && ['UART_DISCONNECTED','UART_TIMEOUT'].includes(error.code);
+        job.status = unconfirmed ? 'interrupted' : 'failed';
+        job.detail = unconfirmed ? 'Core and application were transferred; final device confirmation is unavailable. Recovery may already be complete. Keep power connected; do not erase or factory-flash again. ' + error.message : error.message;
         try { sessionStorage.setItem('iot-md-seed-completion', JSON.stringify(job)); } catch (_) {}
         await publish().then(() => sessionStorage.removeItem('iot-md-seed-completion')).catch(() => {});
       }

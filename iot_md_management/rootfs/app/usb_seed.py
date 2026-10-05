@@ -88,7 +88,7 @@ class USBSeedManager:
             percent = int(request.get('percent', job['percent']))
             status = request.get('status', 'running')
             final_stage = job.get('milestone_count', 7) if job.get('kind') == 'recovery' else 5
-            if not job['stage'] <= stage <= final_stage or not 0 <= percent <= 100 or status not in ('running', 'complete', 'failed'):
+            if not job['stage'] <= stage <= final_stage or not 0 <= percent <= 100 or status not in ('running', 'complete', 'failed', 'interrupted'):
                 raise ValueError('USB seeding progress is invalid.')
             if status == 'complete' and stage != final_stage:
                 raise ValueError('USB operation must finish verification and reboot steps before completion.')
@@ -97,6 +97,6 @@ class USBSeedManager:
             job.update(stage=stage, percent=percent, status=status,
                        updated_at=int(self.now()), detail=str(request.get('detail', job['detail']))[:512])
             self._save()
-            if status in ('complete', 'failed'):
+            if status in ('complete', 'failed', 'interrupted'):
                 self._audit(job)
             return dict(job)

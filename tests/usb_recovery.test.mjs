@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {webcrypto} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
-import {readRecoveryBundle, recoverSecuredDevice, recoveryPreflight, eraseRecoveryState, verifyRecoveryManifests, RecoveryREPL} from '../iot_md_management/rootfs/app/assets/usb_recovery.js';
+import {readRecoveryBundle, recoverSecuredDevice, recoveryPreflight, recoveryResultProbe, confirmRecoveryAfterReset, eraseRecoveryState, verifyRecoveryManifests, RecoveryREPL} from '../iot_md_management/rootfs/app/assets/usb_recovery.js';
 if (!globalThis.crypto) globalThis.crypto = webcrypto;
 const sha = async bytes => Buffer.from(await crypto.subtle.digest('SHA-256', bytes)).toString('hex');
 const base = {format_version:6, target_board:'esp32-s3', signature:'a'.repeat(128), signature_scheme:'ecdsa-p256-sha256', version:'3.0.0-alpha.96'};
@@ -86,6 +86,7 @@ test('device Python snippets compile without execution', async () => {
   await recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x',()=>{});
   const sources=repl.calls.filter(source=>!['enter','reboot','reconnect'].includes(source)&&!source.startsWith('wait:'));
   sources.push(verifyRecoveryManifests(core.manifest,app.manifest));
+  sources.push(recoveryResultProbe);
   const result=spawnSync('python3',['-c','import json,sys\nfor s in json.load(sys.stdin): compile(s,"recovery","exec")'],{input:JSON.stringify(sources),encoding:'utf8'});
   assert.equal(result.status,0,result.stderr);
 });
@@ -189,4 +190,87 @@ test('old signed core is refused before USB mutations unless explicitly resuming
   const [core,app]=await bundles(true), repl=fakeREPL(core);
   await assert.rejects(recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x',()=>{}),/Alpha 97/);
   assert.deepEqual(repl.calls,[]);
+});
+
+const expectedRecovery = {device:'original-board', partition:'ota_1', coreVersion:'alpha97', applicationVersion:'alpha97', applicationSHA256:'a'.repeat(64)};
+function confirmationREPL(mode='passive', override={}) {
+  const expected=expectedRecovery, calls=[];
+  const receipt={status:'ready',core_version:expected.coreVersion,application_version:expected.applicationVersion,application_sha256:expected.applicationSHA256};
+  const saved={device:expected.device,partition:expected.partition,provisioned:false,core_version:expected.coreVersion,application_status:'ready',application_version:expected.applicationVersion,has_application:true,selected_paths:['iotmd.py','app_settings.json'],receipt,...override};
+  let reopens=0;
+  return {calls,async until(marker){
+    calls.push('wait:'+marker);
+    if(mode==='lost'||(mode==='reconnect'&&!reopens)) throw Object.assign(new Error('USB console disconnected'), {code:reopens?'UART_TIMEOUT':'UART_DISCONNECTED'});
+    return marker==='\r\n'?JSON.stringify(receipt):'';
+  },async reopenAfterReset(){reopens++; calls.push('reopen');},async enter(){calls.push('enter');},async exec(source){calls.push(source);return JSON.stringify(saved);},async reboot(){calls.push('restart-setup');}};
+}
+
+test('reset disconnect is reopened passively without interrupting setup when receipt arrives', async () => {
+  const repl=confirmationREPL('reconnect');
+  await confirmRecoveryAfterReset(repl,expectedRecovery,()=>{},0);
+  assert.equal(repl.calls.filter(call=>call==='reopen').length,1);
+  assert.ok(!repl.calls.includes('enter'));
+  assert.ok(!repl.calls.includes('restart-setup'));
+});
+
+test('missed receipt uses saved result and restores setup without upload or erase replay', async () => {
+  const repl=confirmationREPL('lost');
+  await confirmRecoveryAfterReset(repl,expectedRecovery,()=>{},0);
+  assert.equal(repl.calls.filter(call=>call===recoveryResultProbe).length,1);
+  assert.equal(repl.calls.filter(call=>call==='restart-setup').length,1);
+  assert.ok(!repl.calls.some(call=>/writeblocks|_remove_tree|stage_bundle|\.upload/.test(call)));
+});
+
+test('wrong device or configured device is never restarted during confirmation', async () => {
+  for (const override of [{device:'other-board'},{provisioned:true}]) {
+    const repl=confirmationREPL('lost',override);
+    await assert.rejects(confirmRecoveryAfterReset(repl,expectedRecovery,()=>{},0));
+    assert.ok(!repl.calls.includes('restart-setup'));
+  }
+});
+
+test('wrong slot, core, app state or digest cannot be reported as confirmed', async () => {
+  for (const override of [{partition:'ota_0'},{core_version:'old'},{application_status:'idle'},{selected_paths:['app_settings.json']},{receipt:null},{receipt:{}},{receipt:{status:'failed'}},{receipt:{status:'ready',core_version:'alpha97',application_version:'alpha97',application_sha256:'b'.repeat(64)}}]) {
+    const repl=confirmationREPL('lost',override);
+    await assert.rejects(confirmRecoveryAfterReset(repl,expectedRecovery,()=>{},0));
+    assert.equal(repl.calls.filter(call=>call==='restart-setup').length,1);
+  }
+});
+
+test('explicit failed boot receipt does not trigger a recovery replay or console inspection', async () => {
+  const repl=confirmationREPL();
+  repl.until=async marker=>marker==='\r\n'?JSON.stringify({status:'failed'}):'';
+  await assert.rejects(confirmRecoveryAfterReset(repl,expectedRecovery,()=>{},0));
+  assert.deepEqual(repl.calls,[]);
+});
+
+test('same SerialPort can be reopened after transient open failure without selecting another board', async () => {
+  const port={}, repl=new RecoveryREPL(port); let opens=0,closes=0;
+  repl.close=async()=>{closes++;};
+  repl.open=async()=>{opens++;if(opens===1)throw new Error('port not back yet');};
+  await repl.reopenAfterReset(2000);
+  assert.equal(repl.port,port);
+  assert.equal(opens,2); assert.equal(closes,2);
+});
+
+test('UART timeout is classified without exposing device output', async () => {
+  const repl=new RecoveryREPL({});
+  await assert.rejects(repl.until('missing',0),error=>error.code==='UART_TIMEOUT');
+});
+
+test('complete recovery survives a missed reset receipt without replaying transfer milestones', async () => {
+  const [core,app]=await bundles(), repl=fakeREPL(core,'',app), originalExec=repl.exec;
+  const originalNow=Date.now; let clock=0;
+  // Skip only the passive observation budget; the full transfer still runs.
+  repl.until=async()=>{throw Object.assign(new Error('reset lost receipt'),{code:'UART_TIMEOUT'});};
+  repl.exec=async source=>source===recoveryResultProbe?JSON.stringify({device:'test-board',core_version:core.manifest.version,partition:'ota_1',provisioned:false,application_status:'ready',application_version:app.manifest.version,has_application:true,selected_paths:['iotmd.py','app_settings.json'],receipt:{status:'ready',core_version:core.manifest.version,application_version:app.manifest.version,application_sha256:app.sha256}}):originalExec(source);
+  Date.now=()=>{clock+=180001;return clock;};
+  const milestones=[];
+  try { await recoverSecuredDevice(repl,core,app,'StrongSetup7Key!x',stage=>milestones.push(stage)); }
+  finally { Date.now=originalNow; }
+  assert.equal(milestones.at(-1),8);
+  assert.equal(repl.calls.filter(source=>source.includes('_remove_tree')).length,1);
+  assert.equal(repl.calls.filter(source=>source.includes('writeblocks')).length,1);
+  assert.equal(repl.calls.filter(source=>source.includes("open('.app-update.bundle.upload','wb')")).length,1);
+  assert.equal(repl.calls.filter(source=>source==='reboot').length,2);
 });

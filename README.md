@@ -106,6 +106,15 @@ interruption, inspect the board before retrying; there is no automatic
 hardware retry. Hardware qualification of this browser recovery workflow
 is still required before production use.
 
+Recovery confirmation tolerates USB disappearing during reset and reopens only
+the selected port. If the boot receipt was missed, it allows up to three minutes
+for core validation, then reads the saved receipt over UART and checks device
+identity, core version, OTA slot, application digest and complete staged state.
+This fallback briefly interrupts setup and requests a normal restart to restore
+it; it never repeats an upload or erase. The normal path remains one reset and
+does not interrupt setup. An unavailable result is shown as interrupted/unknown,
+not evidence that the device failed. These checks work with the Alpha 97 bundles.
+
 If recovery stops after configuration reset, select **Resume application
 staging only**, retaining the same signed core/application bundles and setup
 password file. The device must still be unprovisioned; the running core's
