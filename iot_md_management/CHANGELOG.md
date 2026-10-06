@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## 2.8.15
+
+- Separate Devices (Enrol / List) and Profiles (New / List) in IoT-MD-style
+  accessible navigation. Use searchable release and profile tables.
+- Remove the enrollment Management ID. Migrate existing records and their
+  history, encrypted backups, jobs and schedules to hostname-based keys in one
+  transaction, with a private database snapshot and collision checks.
+- Show independent API and device-health LEDs, with hover diagnostics and
+  stale/unknown states. Refresh both with one icon, including connected devices.
+- Group portal auto-promotion choices as Alpha, Beta and Stable checkboxes,
+  reflecting the matching HA configuration. Never promote Alpha imports to
+  Beta merely because automatic Alpha promotion is disabled.
 
 ## 2.8.14
 

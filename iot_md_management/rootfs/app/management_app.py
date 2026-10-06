@@ -112,6 +112,7 @@ STORE = FleetStore(
     event_retention=int(OPTIONS.get('event_retention', 5000)),
     secret_key_path=PROFILE_SECRET_KEY_PATH,
 )
+STORE.migrate_hostname_identities()
 SIGNER = PolicySigner(SIGNING_KEY_PATH, PUBLIC_KEY_PATH)
 USB_SEED = USBSeedManager(STORE)
 CATALOG_SIGNER = CatalogSigner(SIGNING_KEY_PATH, PUBLIC_KEY_PATH)
@@ -284,6 +285,7 @@ def render_portal(page):
         page = 'actions'
     values = {
         '__PAGE__': page,
+        '__HEALTH_STALE_AFTER__': max(180, int(OPTIONS.get('poll_interval_s', 60)) * 3),
         '__GITHUB_REPOSITORY__': OPTIONS.get(
             'github_repository', 'IanW6374/IoT-Modular-Device'
         ),
@@ -300,6 +302,9 @@ def render_portal(page):
         '__AUTO_PROMOTE_ALPHA__': 'Enabled' if OPTIONS.get(
             'auto_promote_alpha', False
         ) else 'Disabled',
+        '__AUTO_PROMOTE_STABLE_CHECKED__': 'checked' if OPTIONS.get('auto_promote_stable', False) else '',
+        '__AUTO_PROMOTE_BETA_CHECKED__': 'checked' if OPTIONS.get('auto_promote_beta', False) else '',
+        '__AUTO_PROMOTE_ALPHA_CHECKED__': 'checked' if OPTIONS.get('auto_promote_alpha', False) else '',
         '__FLEET_KEY_FINGERPRINT__': hashlib.sha256(
             PUBLIC_KEY_PATH.read_bytes()
         ).hexdigest(),
@@ -431,7 +436,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path.startswith('/api/seed/'):
                 self._json(200, USB_SEED.update(path[len('/api/seed/'):], request))
             elif path == '/api/devices':
-                result = STORE.register(request)
+                result = STORE.enroll(request)
                 STORE.record_audit(
                     'device.registered', 'complete', result['id'], result['host'],
                     {'cohort': result['cohort']}
@@ -713,7 +718,6 @@ def _release_sync():
             candidate = next((
                 item for item in inventory.get('releases', [])
                 if item['tag'] in imported and item.get('prerelease') and (
-                    not auto_promote_alpha or
                     'alpha' not in (str(item.get('version', '')) + ' ' +
                                     str(item.get('tag', ''))).lower()
                 )

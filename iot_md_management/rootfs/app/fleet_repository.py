@@ -6,6 +6,8 @@ import threading
 import time
 from pathlib import Path
 
+from fleet_identity import hostname_identity, migrate_hostname_identities
+
 
 SCHEMA_VERSION = 4
 
@@ -379,6 +381,27 @@ class FleetRepository:
             1 if record.get('enabled', True) else 0,
             description.strip(),
         )
+
+    def enroll(self, record):
+        """Derive new local identities without re-keying existing fleet history."""
+        record = dict(record)
+        host, identifier = hostname_identity(record.get('host'))
+        record['host'] = host
+        if record.get('id') and record['id'] != identifier:
+            raise ValueError('enrollment identity is derived from the hostname')
+        record['id'] = identifier
+        self._device_values(record)
+        with self.lock:
+            duplicate = self.connection.execute(
+                "SELECT id FROM devices WHERE lower(rtrim(host, '.'))=? OR id=?",
+                (host, identifier),
+            ).fetchone()
+            if duplicate:
+                raise ValueError('device is already enrolled; edit its existing entry')
+            return self.register(record)
+
+    def migrate_hostname_identities(self):
+        return migrate_hostname_identities(self)
 
     def register(self, record):
         values = self._device_values(record)

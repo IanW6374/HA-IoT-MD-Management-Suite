@@ -17,7 +17,20 @@ their unreferenced local files and obsolete channel catalogs.
 
 ## Device settings
 
-Device summaries use the hostname, connection status and a truncated description.
+Devices has separate Enrol and List submenu pages. Enrollment uses the hostname,
+without a separate Management ID. On startup existing fleet references migrate
+atomically to hostname-based keys; the add-on retains a private pre-migration
+SQLite snapshot alongside `fleet.db`. Duplicate hostnames or conflicting history
+block migration rather than merging data. Existing hardware identities, signing
+keys, encrypted backup envelopes and recovery passwords are unchanged.
+
+Device summaries use the hostname, separate API and device-health LEDs, and a
+truncated description. Hover or focus an LED for diagnostics. One refresh icon
+polls inventory, configuration, runtime diagnostics and events for either a
+connected or unavailable device. Device health uses reported lifecycle, service,
+task and qualification observation states—not lifetime error counters. Unknown
+or stale reports never display as healthy. The portal auto-promotion checkboxes
+reflect the Alpha / Beta / Stable choices managed in HA app configuration.
 Select a hostname to open its settings, backup schedule and recovery points.
 The description comes from the device when enrollment leaves it blank. Editing
 or clearing it later writes to the enrolled device's configuration API, which

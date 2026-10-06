@@ -39,13 +39,13 @@ configuration:
     name: GitHub synchronization interval
     description: Seconds between automatic GitHub Release inventory checks.
   auto_promote_stable:
-    name: Automatically promote production releases
+    name: 'Auto-promotion: Stable'
     description: Promote the newest newly imported non-prerelease to Stable after verification.
   auto_promote_beta:
-    name: Automatically promote prereleases
-    description: Promote the newest newly imported prerelease to Beta after verification.
+    name: 'Auto-promotion: Beta'
+    description: Promote the newest newly imported non-Alpha prerelease to Beta after verification.
   auto_promote_alpha:
-    name: Automatically promote Alpha releases
+    name: 'Auto-promotion: Alpha'
     description: Promote the newest newly imported Alpha release to Alpha after verification.
 network:
   8443/tcp: IoT-MD signed release endpoint

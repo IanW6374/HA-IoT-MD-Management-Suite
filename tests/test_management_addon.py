@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.8.14', addon)
+        self.assertIn('version: 2.8.15', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -50,7 +50,7 @@ class FleetAddonTests(unittest.TestCase):
         self.assertIn('<header class="topbar">', self.module.HTML)
         self.assertIn('<span class="brand-mark">IoT<br>MD</span>', self.module.HTML)
         self.assertIn('<span>IoT MD Management Suite</span>', self.module.HTML)
-        self.assertIn('<nav aria-label="Primary">', self.module.HTML)
+        self.assertIn('<nav aria-label="Primary" id="primary-nav"', self.module.HTML)
         self.assertIn('Verified releases', self.module.HTML)
         self.assertIn('Management trust', self.module.HTML)
         self.assertIn('data-page-link="activity"', self.module.HTML)
@@ -64,7 +64,8 @@ class FleetAddonTests(unittest.TestCase):
         expected = hashlib.sha256(self.module.PUBLIC_KEY_PATH.read_bytes()).hexdigest()
         self.assertIn(expected, settings)
         self.assertNotIn('__FLEET_KEY_FINGERPRINT__', settings)
-        self.assertIn('Automatic Alpha promotion', settings)
+        self.assertIn('<h2>Auto-promotion</h2>', settings)
+        self.assertIn('<span>Alpha</span>', settings)
         self.assertNotIn('__AUTO_PROMOTE_ALPHA__', settings)
 
     def test_generated_portal_javascript_parses(self):
@@ -189,9 +190,10 @@ for (const status of ['complete','running']) {
         self.assertNotIn('name="cert_path"', self.module.HTML)
         self.assertNotIn('name="key_path"', self.module.HTML)
         self.assertIn('add-on configuration', self.module.HTML)
-        self.assertIn('Management ID', self.module.HTML)
+        self.assertNotIn('Management ID', self.module.HTML)
+        self.assertNotIn('<input name="id"', self.module.HTML)
         self.assertIn('immutable device identity', self.module.HTML)
-        self.assertIn('Retry connection', self.module.HTML)
+        self.assertIn('Refresh connection and device health', self.module.HTML)
         self.assertIn("button.setAttribute('aria-busy','true')", self.module.HTML)
         self.assertIn('<svg viewBox="0 0 24 24" aria-hidden="true"', self.module.HTML)
         self.assertIn('device-status-actions', self.module.HTML)
@@ -203,13 +205,14 @@ for (const status of ['complete','running']) {
         if not runtime:
             self.skipTest('Node.js is required for device retry validation')
         script = self.module.HTML.split('<script>', 1)[1].split('</script>', 1)[0]
-        functions = '\n'.join(
+        functions = script.split('function apiConnectionStatus(', 1)[1].split('function matchesCatalogSearch(', 1)[0]
+        functions = 'function apiConnectionStatus(' + functions + '\n' + '\n'.join(
             line for line in script.splitlines()
-            if line.startswith(('function deviceConnectionBadges(',
-                                'async function pollDevice('))
+            if line.startswith('async function pollDevice(')
         )
         check = subprocess.run([runtime, '-e', '''
 const assert = require('node:assert/strict');
+const healthStaleAfter=Infinity;
 const deviceRetries = new Map(), box = {innerHTML:''};
 const device = {id:'IoT-MD-001',name:'Boiler',enabled:true,host:'iot-md-001.local',port:8444,last_error:'TLS handshake timed out'};
 const state = {devices:[device]};
@@ -226,7 +229,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
   renderDevices();
   const header=box.innerHTML;
   assert.match(header, /device-status-actions/);
-  assert.match(header, /Unavailable/);
+  assert.match(header, /API unavailable/);
   assert.match(header, /class="badge device-retry/);
   assert.equal(box.innerHTML.split('device-retry').length-1,1);
   const button = {setAttribute(){}};
@@ -240,8 +243,8 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
   finish({device:{...device,last_error:'',last_seen:123}});
   await pending;
   assert.equal(state.devices[0].last_seen,123);
-  assert.match(box.innerHTML,/Healthy/);
-  assert.ok(!box.innerHTML.includes('device-retry'));
+  assert.match(box.innerHTML,/API connected/);
+  assert.ok(box.innerHTML.includes('device-retry'));
   assert.ok(!box.innerHTML.includes('Retrying'));
   assert.ok(!box.innerHTML.includes('device-connection-error'));
   assert.equal(deviceRetries.size,0);
@@ -249,7 +252,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
   const failed=pollDevice(device.id,{setAttribute(){}});
   finish({device:{...device,last_error:'Device still unavailable'}});
   await failed;
-  assert.match(box.innerHTML,/Unavailable/);
+  assert.match(box.innerHTML,/API unavailable/);
   assert.equal(state.devices[0].last_error,'Device still unavailable');
   assert.match(box.innerHTML,/class="badge device-retry/);
   assert.equal(deviceRetries.size,0);
@@ -261,8 +264,8 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
   assert.equal(deviceRetries.get(device.id).pending,false);
   device.enabled=false;
   state.devices=[device];
-  assert.match(deviceConnectionBadges(device),/Enable management before retrying/);
-  assert.match(deviceConnectionBadges(device),/disabled/);
+  assert.match(deviceConnectionBadges(device),/management disabled/);
+  assert.ok(!deviceConnectionBadges(device).includes('device-retry'));
 })().catch(error=>{console.error(error);process.exitCode=1});
 '''], capture_output=True, text=True)
         self.assertEqual(check.returncode, 0, check.stderr)
@@ -396,7 +399,8 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
 
     def test_unified_deployment_workflow_hides_policy_implementation_details(self):
         self.assertIn('data-page-link="actions"', self.module.HTML)
-        self.assertIn('class="nav-menu"', self.module.HTML)
+        self.assertIn('class="nav-group"', self.module.HTML)
+        self.assertIn('class="nav-link nav-menu-trigger"', self.module.HTML)
         self.assertIn('data-action-nav="new"', self.module.HTML)
         self.assertIn('data-action-nav="inflight"', self.module.HTML)
         self.assertIn('<h1 id="actions-title">New action</h1>', self.module.HTML)
@@ -476,11 +480,11 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         ):
             self.assertIn("'" + setting + "'", self.module.HTML)
 
-    def test_release_grid_is_fixed_and_profiles_are_grouped(self):
-        self.assertIn(
-            '.release-grid{grid-template-columns:repeat(4,minmax(0,1fr))}',
-            self.module.HTML,
-        )
+    def test_release_and_profile_tables_are_searchable_and_editor_is_grouped(self):
+        self.assertIn('class="catalog-table release-table"', self.module.HTML)
+        self.assertIn('class="catalog-table profile-table"', self.module.HTML)
+        self.assertIn('id="release-search"', self.module.HTML)
+        self.assertIn('id="profile-search"', self.module.HTML)
         self.assertIn('class="release-fingerprint"', self.module.HTML)
         for group in (
             'Profile details', 'Time and logging', 'Home Assistant', 'MQTT',
@@ -518,7 +522,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         )
         self.assertIn('Promise.allSettled', self.module.HTML)
         self.assertIn('Some management data could not be loaded', self.module.HTML)
-        self.assertIn("if(activePage==='profiles')", self.module.HTML)
+        self.assertIn("if(activePage==='profiles'&&fleetSubview('profiles')==='new')", self.module.HTML)
 
     def test_devices_are_editable_and_profiles_are_first_class(self):
         self.assertIn('Device settings', self.module.HTML)
@@ -750,6 +754,166 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
                 mock.call('v3.0.0-beta.1', 'beta'),
             ],
         )
+
+    def test_beta_promotion_does_not_take_alpha_when_alpha_promotion_is_disabled(self):
+        releases = mock.Mock()
+        releases.sync.return_value = {
+            'imported': ['v3.0.0-alpha.101', 'v3.0.0-beta.1'],
+            'inventory': {'releases': [
+                {'tag': 'v3.0.0-alpha.101', 'prerelease': True},
+                {'tag': 'v3.0.0-beta.1', 'prerelease': True},
+            ]},
+        }
+        with mock.patch.object(self.module, 'RELEASES', releases), mock.patch.dict(
+            self.module.OPTIONS, {'auto_promote_alpha': False, 'auto_promote_beta': True},
+        ):
+            self.module._release_sync()
+        releases.promote.assert_called_once_with('v3.0.0-beta.1', 'beta')
+
+    def test_enrollment_derives_identity_from_hostname_and_prevents_duplicates(self):
+        store = self.module.STORE
+        device = store.enroll({'host': ' IoT-MD-001.local. ', 'description': 'Boiler'})
+        self.assertEqual(device['id'], 'iot-md-001.local')
+        self.assertEqual(device['host'], 'iot-md-001.local')
+        for request in ({'host': 'IOT-MD-001.LOCAL'}, {'host': 'iot-md-001.local.'}):
+            with self.assertRaisesRegex(ValueError, 'already enrolled'):
+                store.enroll(request)
+        with self.assertRaisesRegex(ValueError, 'derived from the hostname'):
+            store.enroll({'host': 'other.local', 'id': device['id']})
+        self.assertEqual(store.get_device(device['id'])['description'], 'Boiler')
+
+    def test_hostname_enrollment_preserves_legacy_records_and_history(self):
+        store = self.module.STORE
+        store.register({'id': 'legacy-id', 'host': 'IoT-MD-001.local'})
+        store.record_poll('legacy-id', {'device': {'device_id': 'hardware-123'}}, {}, {})
+        with self.assertRaisesRegex(ValueError, 'already enrolled'):
+            store.enroll({'host': 'iot-md-001.local'})
+        self.assertEqual(store.get_device('legacy-id')['inventory']['device']['device_id'], 'hardware-123')
+
+    def test_enrollment_rejects_urls_and_long_hostname_keys_do_not_collide(self):
+        store = self.module.STORE
+        for host in ('', 'https://iot-md.local', 'iot-md.local/path', 'bad host', 'a' * 254):
+            with self.assertRaises(ValueError):
+                store.enroll({'host': host})
+        prefix = 'a' * 60 + '.'
+        first = store.enroll({'host': prefix + 'first.local'})
+        second = store.enroll({'host': prefix + 'second.local'})
+        self.assertLessEqual(len(first['id']), 64)
+        self.assertNotEqual(first['id'], second['id'])
+
+    def test_navigation_separates_fleet_lists_and_editors(self):
+        for href in ('devices?view=enrol', 'devices?view=list', 'profiles?view=new', 'profiles?view=list'):
+            self.assertIn('href="' + href + '"', self.module.HTML)
+        for view in ('list', 'enrol', 'new'):
+            self.assertIn('data-fleet-view="' + view + '"', self.module.HTML)
+        self.assertIn("setTimeout(()=>open(group),260)", self.module.HTML)
+        self.assertIn("event.key==='Escape'", self.module.HTML)
+
+    def test_hostname_migration_preserves_backups_jobs_schedules_and_audit(self):
+        store = self.module.STORE
+        device = store.register({'id': 'old-management-id', 'host': 'IoT-MD-001.local', 'name': 'Boiler'})
+        store.record_poll(device['id'], {'device': {'device_id': 'immutable-hardware-id'}}, {'health': {'counters': {'boots': 12}}}, {'events': [{'kind': 'boot'}]})
+        envelope = {'format': 'iotmd-secure-backup', 'ciphertext': 'encrypted-configuration'}
+        backup = store.save_backup(device, envelope, 'test-recovery-password')
+        raw_backup = dict(store.connection.execute('SELECT * FROM backups').fetchone())
+        deployment = store.create_deployment({'profile_name': '', 'update': {'release_sequence': 2806, 'release_type': 'application', 'version': '3.0.0-alpha.101'}, 'activation': 'now'}, [device['id']])
+        job = store.enqueue_job('deployment', deployment['id'], {'device_id': device['id']}, 'deployment:' + deployment['id'] + ':' + device['id'])
+        backup_job = store.enqueue_job('backup', device['id'], {'source': 'scheduled'}, 'backup:scheduled:' + device['id'] + ':today')
+        store.set_metadata('backup_device_settings', json.dumps({device['id']: {'enabled': True, 'retention': 7}}))
+        store.set_metadata('backup_last_schedule_date:' + device['id'], 'today')
+        store.set_device_error(device['id'], 'TLS timeout')
+        self.module.acknowledge_attention({})
+        mapping = store.migrate_hostname_identities()
+        hostname = 'iot-md-001.local'
+        self.assertEqual(mapping, {device['id']: hostname})
+        self.assertIsNone(store.get_device(device['id']))
+        self.assertEqual(store.get_device(hostname)['inventory']['device']['device_id'], 'immutable-hardware-id')
+        self.assertEqual(store.get_device(hostname)['health']['health']['counters']['boots'], 12)
+        self.assertEqual(store.list_events()[0]['device_id'], hostname)
+        restored = store.get_backup(backup['id'], include_payload=True)
+        self.assertEqual(restored['device_id'], hostname)
+        self.assertEqual(restored['envelope'], envelope)
+        self.assertEqual(restored['password'], 'test-recovery-password')
+        for field in ('envelope', 'recovery_secret', 'digest', 'size_bytes'):
+            self.assertEqual(store.connection.execute('SELECT * FROM backups').fetchone()[field], raw_backup[field])
+        self.assertEqual(store.get_deployment(deployment['id'])['targets'], [hostname])
+        self.assertIn(hostname, store.get_deployment(deployment['id'])['results'])
+        self.assertEqual(store.get_job(job['id'])['payload']['device_id'], hostname)
+        self.assertEqual(store.get_job(backup_job['id'])['target'], hostname)
+        self.assertEqual(self.module.device_backup_settings(hostname)['retention'], 7)
+        self.assertEqual(store.metadata('backup_last_schedule_date:' + hostname), 'today')
+        self.assertIsNone(store.metadata('backup_last_schedule_date:' + device['id']))
+        self.assertTrue(self.module.attention_items()[0]['acknowledged'])
+        self.assertEqual(store.connection.execute('PRAGMA foreign_key_check').fetchall(), [])
+        snapshots = list(Path(self.temp.name).glob('fleet.db.before-hostname-migration-*.db'))
+        self.assertEqual(len(snapshots), 1)
+        self.assertEqual(snapshots[0].stat().st_mode & 0o777, 0o600)
+        with sqlite3.connect(snapshots[0]) as original:
+            self.assertEqual(original.execute('SELECT id FROM devices').fetchone()[0], device['id'])
+        self.assertEqual(store.migrate_hostname_identities(), {})
+
+    def test_hostname_migration_rolls_back_entire_transaction_on_reference_collision(self):
+        store = self.module.STORE
+        store.register({'id': 'old-id', 'host': 'new.local'})
+        store.record_poll('old-id', {}, {}, {'events': [{'kind': 'boot'}]})
+        store.set_metadata('backup_device_settings', json.dumps({'old-id': {'retention': 7}, 'new.local': {'retention': 3}}))
+        with self.assertRaisesRegex(ValueError, 'merge existing history or schedules'):
+            store.migrate_hostname_identities()
+        self.assertIsNotNone(store.get_device('old-id'))
+        self.assertIsNone(store.get_device('new.local'))
+        self.assertEqual(store.list_events()[0]['device_id'], 'old-id')
+        self.assertEqual(store.connection.execute('PRAGMA foreign_key_check').fetchall(), [])
+
+    def test_hostname_migration_rejects_duplicate_hosts_without_modifying_data(self):
+        store = self.module.STORE
+        store.register({'id': 'first-id', 'host': 'same.local'})
+        store.register({'id': 'second-id', 'host': 'SAME.LOCAL.'})
+        with self.assertRaisesRegex(ValueError, 'multiple devices use the same hostname'):
+            store.migrate_hostname_identities()
+        self.assertEqual(set(store.device_ids()), {'first-id', 'second-id'})
+
+    def test_hostname_migration_handles_swapped_keys_without_cross_linking(self):
+        store = self.module.STORE
+        store.register({'id': 'second.local', 'host': 'first.local'})
+        store.register({'id': 'first.local', 'host': 'second.local'})
+        for identifier in ('first.local', 'second.local'):
+            store.record_poll(identifier, {'marker': identifier}, {}, {'events': [{'marker': identifier}]})
+            store.enqueue_job('poll', identifier, {}, 'poll:' + identifier + ':1')
+            store.set_metadata('backup_last_schedule_date:' + identifier, identifier)
+        store.record_audit('device.registered', 'complete', 'second.local', 'first.local')
+        rollout = store.create_rollout({'release_sequence': 2806, 'cohorts': ['default']})
+        store.record_rollout_result(rollout['id'], 'second.local', 'complete')
+        store.migrate_hostname_identities()
+        self.assertEqual(store.get_device('first.local')['inventory']['marker'], 'second.local')
+        self.assertEqual(store.get_device('second.local')['inventory']['marker'], 'first.local')
+        for event in store.list_events():
+            self.assertNotEqual(event['device_id'], event['event']['marker'])
+        self.assertEqual(store.metadata('backup_last_schedule_date:first.local'), 'second.local')
+        self.assertEqual(store.metadata('backup_last_schedule_date:second.local'), 'first.local')
+        audit = next(event for event in store.list_audit() if event['action'] == 'device.registered')
+        self.assertEqual(audit['subject'], 'first.local')
+        self.assertEqual(audit['target'], 'first.local')  # Hostname, not a local ID.
+        self.assertIn('first.local', store.get_rollout(rollout['id'])['results'])
+
+    def test_upgrade_bootstrap_migrates_existing_database_without_clean_install(self):
+        self.module.STORE.register({'id': 'old-management-id', 'host': 'IoT-MD-001.local'})
+        self.module.STORE.close()
+        spec = importlib.util.spec_from_file_location('iot_md_migrated_startup_test', Path(self.module.__file__))
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+        self.assertEqual(self.module.STORE.device_ids(), ['iot-md-001.local'])
+
+    def test_portal_promotion_checkboxes_match_ha_options(self):
+        with mock.patch.dict(self.module.OPTIONS, {
+            'auto_promote_alpha': True, 'auto_promote_beta': False, 'auto_promote_stable': True,
+        }):
+            settings = self.module.render_portal('settings').decode()
+        section = settings.split('<h2>Auto-promotion</h2>', 1)[1].split('</fieldset>', 1)[0]
+        self.assertIn('type="checkbox" checked disabled><span>Alpha</span>', section)
+        self.assertIn('type="checkbox"  disabled><span>Beta</span>', section)
+        self.assertIn('type="checkbox" checked disabled><span>Stable</span>', section)
+        self.assertNotIn('__AUTO_PROMOTE_', settings)
+        self.assertNotIn('__HEALTH_STALE_AFTER__', settings)
 
     def test_release_sync_removes_github_deleted_inventory_and_assets(self):
         from release_catalog import ReleaseCatalog
@@ -1352,7 +1516,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
 
     def test_device_table_and_edit_form_have_consistent_controls(self):
         html = self.module.HTML
-        self.assertIn('<th scope="col">Hostname</th><th scope="col">Status</th><th scope="col">Description</th>', html)
+        self.assertIn('<th scope="col">Hostname</th><th scope="col">API</th><th scope="col">Device health</th><th scope="col">Description</th>', html)
         self.assertIn('text-overflow:ellipsis;white-space:nowrap', html)
         self.assertIn('height:42px;min-height:42px', html)
         self.assertIn('align-content:start;grid-auto-rows:max-content', html)
