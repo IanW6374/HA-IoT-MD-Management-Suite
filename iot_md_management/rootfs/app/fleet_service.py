@@ -259,21 +259,25 @@ class FleetController:
 
     def update_device(self, identifier, changes, force_description=False):
         candidate = self.store.prepare_device_update(identifier, changes)
-        current = self.store.get_device(identifier)
         description = str(candidate.get('description') or '').strip()
-        changed = 'description' in changes and (
-            force_description or description != current.get('description', '')
-        )
+        # An explicitly submitted description is a device write, even if it
+        # matches our cache: an earlier accepted response may not reflect the
+        # device's persisted configuration. Unedited forms omit this field.
+        changed = 'description' in changes
         if changed:
             # Metadata belongs to the enrolled device, not a newly edited address.
             record = self.store.get_device(identifier, public=False)
-            result = self._client(record).request('/api/v2/configuration/profile', 'POST', {
+            client = self._client(record)
+            result = client.request('/api/v2/configuration/profile', 'POST', {
                 'format_version': 1, 'name': 'Device description',
                 'settings': {'device_description': description},
             })
             if not result.get('accepted') or 'device_description' not in (
                     result.get('profile') or {}).get('applied_settings', []):
                 raise ValueError('Device did not accept the description update')
+            configuration = client.request('/api/v2/configuration').get('configuration') or {}
+            if configuration.get('device_description') != description:
+                raise ValueError('Device accepted the description update but its saved configuration did not confirm it. Refresh the device and retry; check that its application supports device descriptions.')
         self.store.update_device(identifier, changes)
         if changed:
             self.store.record_device_description(identifier, description)

@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.8.15', addon)
+        self.assertIn('version: 2.8.16', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -220,7 +220,7 @@ const document = {getElementById:()=>box};
 const esc = value => String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
 const deviceSchedule=()=>'', when=()=>'', deviceBackupPanels=()=>'';
 const replacePreservingDetails = (node,html) => node.innerHTML=html;
-const renderDevices=()=>box.innerHTML=state.devices.map(deviceConnectionBadges).join('');
+const renderDevices=()=>box.innerHTML=state.devices.map(device=>deviceConnectionBadges(device)+deviceRefreshButton(device)).join('');
 let metrics=0, calls=0, finish;
 const renderMetrics=()=>metrics++;
 let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
@@ -228,7 +228,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
 (async()=>{
   renderDevices();
   const header=box.innerHTML;
-  assert.match(header, /device-status-actions/);
+  assert.match(header, /device-health-led/);
   assert.match(header, /API unavailable/);
   assert.match(header, /class="badge device-retry/);
   assert.equal(box.innerHTML.split('device-retry').length-1,1);
@@ -266,6 +266,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
   state.devices=[device];
   assert.match(deviceConnectionBadges(device),/management disabled/);
   assert.ok(!deviceConnectionBadges(device).includes('device-retry'));
+  assert.equal(deviceRefreshButton(device),'');
 })().catch(error=>{console.error(error);process.exitCode=1});
 '''], capture_output=True, text=True)
         self.assertEqual(check.returncode, 0, check.stderr)
@@ -1453,9 +1454,10 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         store.set_device_error('description-device', 'Previous poll error')
         before = store.get_device('description-device')
         client = mock.Mock()
-        client.request.return_value = {'accepted': True, 'profile': {
+        accepted = {'accepted': True, 'profile': {
             'applied_settings': ['device_description'], 'restart_required': False,
         }}
+        client.request.side_effect = [accepted, {'configuration': {'device_description': 'New description'}}]
         controller = FleetController(store, None)
         controller._client = mock.Mock(return_value=client)
         result = controller.update_device('description-device', {
@@ -1465,17 +1467,41 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertEqual(result['inventory']['configuration']['device_description'], 'New description')
         self.assertEqual(result['host'], 'new.local')
         self.assertEqual(controller._client.call_args.args[0]['host'], 'old.local')
-        client.request.assert_called_once_with('/api/v2/configuration/profile', 'POST', {
+        self.assertEqual(client.request.call_args_list, [mock.call('/api/v2/configuration/profile', 'POST', {
             'format_version': 1, 'name': 'Device description',
             'settings': {'device_description': 'New description'},
-        })
+        }), mock.call('/api/v2/configuration')])
         for key in ('last_seen', 'health', 'fleet', 'event_cursor', 'last_error'):
             self.assertEqual(result[key], before[key])
         client.reset_mock()
+        client.request.side_effect = [accepted, {'configuration': {'device_description': 'New description'}}]
         controller.update_device('description-device', {'description': 'New description', 'cohort': 'test'})
-        client.request.assert_not_called()
+        self.assertEqual(client.request.call_count, 2)  # Explicit retry is not skipped because the cache matches.
+        client.reset_mock()
+        controller.update_device('description-device', {'cohort': 'other'})
+        client.request.assert_not_called()  # Unedited descriptions do not cause device writes.
+        client.request.side_effect = [accepted, {'configuration': {'device_description': ''}}]
         self.assertEqual(controller.update_device('description-device', {'description': ''})['description'], '')
-        self.assertEqual(client.request.call_args.args[2]['settings']['device_description'], '')
+        self.assertEqual(client.request.call_args_list[-2].args[2]['settings']['device_description'], '')
+
+    def test_description_acceptance_requires_device_readback(self):
+        from fleet_service import FleetController
+        store = self.module.STORE
+        store.register({'id': 'description-readback', 'host': 'device.local', 'description': 'Old'})
+        controller = FleetController(store, None)
+        client = mock.Mock()
+        controller._client = mock.Mock(return_value=client)
+        accepted = {'accepted': True, 'profile': {'applied_settings': ['device_description']}}
+        for readback in ({'configuration': {'device_description': 'Old'}}, {'configuration': {}}):
+            client.request.side_effect = [accepted, readback]
+            with self.assertRaisesRegex(ValueError, 'saved configuration did not confirm'):
+                controller.update_device('description-readback', {'description': 'New', 'name': 'Changed'})
+            self.assertEqual(store.get_device('description-readback')['description'], 'Old')
+            self.assertEqual(store.get_device('description-readback')['name'], 'description-readback')
+        client.request.side_effect = [accepted, TimeoutError('readback timed out')]
+        with self.assertRaisesRegex(TimeoutError, 'readback timed out'):
+            controller.update_device('description-readback', {'description': 'New'})
+        self.assertEqual(store.get_device('description-readback')['description'], 'Old')
 
     def test_description_rejection_keeps_local_edits_unsaved(self):
         from fleet_service import FleetController

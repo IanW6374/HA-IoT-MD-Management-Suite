@@ -31,8 +31,29 @@ function deviceHealthStatus(device,now=Date.now()/1000){
   return {tone:'unknown',label:'Device health unknown: no current runtime health state reported'};
 }
 function deviceConnectionBadges(device){
-  const retry=deviceRetries.get(device.id),pending=Boolean(retry?.pending),connection=apiConnectionStatus(device),title=retry?.error||'Refresh connection and device health';
-  return `<div class="device-status-actions">${healthLED(connection)}${device.enabled===false?'':`<button type="button" class="badge device-retry ${retry?.error?'bad':''}" data-device-id="${esc(device.id)}" onclick="pollDevice(this.dataset.deviceId,this)" title="${esc(title)}" aria-label="${esc(title)}" aria-busy="${pending}" ${pending?'disabled':''}><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 7v5h-5M4 17v-5h5M6.1 8a7 7 0 0 1 11.6-2L20 9M4 15l2.3 3A7 7 0 0 0 17.9 16"/></svg></button>`}</div>`;
+  return healthLED(apiConnectionStatus(device));
+}
+function deviceRefreshButton(device){
+  if(device.enabled===false)return '';
+  const retry=deviceRetries.get(device.id),pending=Boolean(retry?.pending),title=retry?.error||'Refresh connection and device health';
+  return `<button type="button" class="badge device-retry ${retry?.error?'bad':''}" data-device-id="${esc(device.id)}" onclick="pollDevice(this.dataset.deviceId,this)" title="${esc(title)}" aria-label="${esc(title)}" aria-busy="${pending}" ${pending?'disabled':''}><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 7v5h-5M4 17v-5h5M6.1 8a7 7 0 0 1 11.6-2L20 9M4 15l2.3 3A7 7 0 0 0 17.9 16"/></svg></button>`;
+}
+function fleetHealthStatus(devices,now=Date.now()/1000){
+  const enabled=devices.filter(device=>device.enabled!==false),counts={healthy:0,failed:0,degraded:0,unknown:0},details=[];
+  for(const device of enabled){
+    const api=apiConnectionStatus(device,now),health=deviceHealthStatus(device,now);
+    const category=api.tone==='bad'||health.tone==='bad'?'failed':api.tone==='warn'||health.tone==='warn'?'degraded':api.tone==='good'&&health.tone==='good'?'healthy':'unknown';
+    counts[category]++;
+  }
+  for(const name of ['healthy','failed','degraded','unknown'])if(counts[name])details.push(`${counts[name]} ${name}`);
+  return {tone:counts.failed?'bad':counts.degraded||counts.unknown?'warn':enabled.length?'good':'unknown',label:enabled.length?`Fleet health (API and device): ${details.join(', ')}. Disabled devices excluded.`:'Fleet health: no enabled devices'};
+}
+function renderFleetHealth(){
+  const indicator=document.getElementById('devices-menu-health');if(!indicator)return;
+  const status=fleetHealthStatus(state.devices);
+  indicator.className='device-health-led '+status.tone;
+  indicator.title=status.label;indicator.setAttribute('aria-label',status.label);
+  const menu=indicator.closest('button');if(menu)menu.title=status.label;
 }
 function matchesCatalogSearch(values,query){const searchable=values.join(' ').toLocaleLowerCase();return query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean).every(word=>searchable.includes(word))}
 function filteredReleases(){return (releaseFilter==='all'?state.releases:state.releases.filter(item=>(item.channels||[]).length)).filter(item=>matchesCatalogSearch([item.version,item.tag,...(item.channels||[]),item.release_sequence,item.source_revision,item.prerelease?'pre-release':'production'],releaseSearch))}

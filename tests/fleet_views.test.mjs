@@ -41,6 +41,22 @@ test('historical error counters do not falsely mark recovered devices unhealthy'
   device.inventory.device={};
   assert.equal(evaluate('deviceHealthStatus(device,now).tone',{device}),'unknown');
 });
+test('fleet menu health combines API and runtime reports, excluding disabled devices',()=>{
+  const failed={...structuredClone(healthy),last_error:'TLS timeout'},degraded=structuredClone(healthy),unknown={...structuredClone(healthy),last_seen:0};
+  degraded.inventory.device.runtime.state.mqtt='degraded';
+  assert.equal(evaluate('fleetHealthStatus([],now).tone'),'unknown');
+  assert.equal(evaluate('fleetHealthStatus(devices,now).tone',{devices:[healthy,{...failed,enabled:false}]}),'good');
+  assert.equal(evaluate('fleetHealthStatus(devices,now).tone',{devices:[healthy,degraded]}),'warn');
+  assert.match(evaluate('fleetHealthStatus(devices,now).label',{devices:[healthy,unknown]}),/1 healthy, 1 unknown/);
+  assert.equal(evaluate('fleetHealthStatus(devices,now).tone',{devices:[healthy,degraded,failed]}),'bad');
+  const runtimeFailure=structuredClone(healthy);runtimeFailure.inventory.device.qualification_observation.health_state='failed';
+  assert.equal(evaluate('fleetHealthStatus(devices,now).tone',{devices:[runtimeFailure]}),'bad');
+});
+test('refresh is independent of API LEDs and remains available on healthy devices',()=>{
+  assert.ok(!evaluate('deviceConnectionBadges(device)').includes('device-retry'));
+  assert.match(evaluate('deviceRefreshButton(device)'),/Refresh connection and device health/);
+  assert.equal(evaluate('deviceRefreshButton(device)',{device:{...healthy,enabled:false}}),'');
+});
 test('release search combines promoted/all filter with case-insensitive multiple words',()=>{
   const state={releases:[{version:'3.0.0-alpha.101',channels:['alpha'],release_sequence:2806},{version:'3.0.0-beta.1',channels:[],release_sequence:2807}],profiles:[]};
   assert.equal(evaluate("releaseSearch='ALPHA 2806';filteredReleases().length",{state,releaseFilter:'promoted'}),1);

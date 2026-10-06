@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.8.16
+
+- Move the shared connection/data refresh icon after the hostname, separate
+  from the API and device-health columns.
+- Verify description changes against the device's saved configuration before
+  updating Management's cache. Explicit saves retry the device write even when
+  the local description already matches; failed verification retains edits.
+- Add an overall health LED beside Devices in the main menu, combining enabled
+  devices' API availability and runtime health with hover/focus diagnostics.
+  Degraded, stale and unknown reports prevent a green fleet summary.
+
 ## 2.8.15
 
 - Separate Devices (Enrol / List) and Profiles (New / List) in IoT-MD-style

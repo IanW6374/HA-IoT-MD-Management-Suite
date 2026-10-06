@@ -26,15 +26,19 @@ keys, encrypted backup envelopes and recovery passwords are unchanged.
 
 Device summaries use the hostname, separate API and device-health LEDs, and a
 truncated description. Hover or focus an LED for diagnostics. One refresh icon
-polls inventory, configuration, runtime diagnostics and events for either a
-connected or unavailable device. Device health uses reported lifecycle, service,
+beside the hostname polls inventory, configuration, runtime diagnostics and
+events for either a connected or unavailable device. Device health uses reported lifecycle, service,
 task and qualification observation states—not lifetime error counters. Unknown
 or stale reports never display as healthy. The portal auto-promotion checkboxes
 reflect the Alpha / Beta / Stable choices managed in HA app configuration.
+The Devices menu health LED combines API and device health across enabled
+devices, including stale or unknown reports. Disabled devices are excluded.
 Select a hostname to open its settings, backup schedule and recovery points.
 The description comes from the device when enrollment leaves it blank. Editing
 or clearing it later writes to the enrolled device's configuration API, which
-requires API-write permission; failed writes keep the unsaved edits visible.
+requires `configuration:write` permission. Saved descriptions are read back
+from the device before Management confirms the change; failed writes or
+verification keep the unsaved edits visible.
 The Management name remains a local label, independent of the device description.
 
 ## Profiles and complete backups
