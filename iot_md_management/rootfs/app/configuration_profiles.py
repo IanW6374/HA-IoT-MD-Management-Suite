@@ -18,7 +18,7 @@ INTEGER_FIELDS = {
     'api_port': (1, 65535),
 }
 TEXT_FIELDS = {
-    'device_name': 64, 'wifi_ssid': 32,
+    'device_name': 64, 'device_description': 256, 'wifi_ssid': 32,
     'wifi_ip_address': 15, 'wifi_subnet_mask': 15,
     'wifi_gateway': 15, 'wifi_dns_server': 15,
     'timezone_name': 64, 'ha_discovery_prefix': 64,

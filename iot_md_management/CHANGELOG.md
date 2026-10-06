@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 2.8.13
+
+- Replace device cards with a searchable table, status/cohort filters and
+  expandable device settings, automated backups and recovery points. Use compact
+  summary rows on mobile; preserve filters, open sections and unsaved edits
+  through refreshes. Hide Retry connection for healthy devices.
+- Rename Host to Hostname, use IoT-MD-001 enrollment examples and add descriptions
+  populated from device inventory unless explicitly overridden in Management.
+  Migrate existing device records without losing their data.
+- Derive universal update compatibility from its verified signed inner bundles,
+  not the separately published application's higher core requirement. Rebuild
+  promoted catalogs on startup, fixing Alpha 99's compatibility rejection.
+- Show nine core/application milestones for universal deployments, retaining
+  per-device completion across polls. Alpha 100 supplies detailed live phases;
+  older applications report only the available command boundaries. Confirm
+  success only after trials finish and do not infer staging from a timeout.
+- Preserve progress advanced during policy submission instead of resetting it
+  to Checking; keep healthy trial confirmation separate from restarting.
+
 ## 2.8.12
 
 - Move device Retry connection into a compact action badge beside the health

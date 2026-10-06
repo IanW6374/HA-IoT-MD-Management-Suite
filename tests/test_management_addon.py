@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.8.12', addon)
+        self.assertIn('version: 2.8.13', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -179,8 +179,11 @@ for (const status of ['complete','running']) {
                       self.module.HTML)
 
     def test_device_enrollment_has_guidance_and_management_actions(self):
-        self.assertIn('placeholder="IoT-MD-002"', self.module.HTML)
-        self.assertIn('without https://', self.module.HTML)
+        self.assertIn('placeholder="IoT-MD-001"', self.module.HTML)
+        self.assertIn('placeholder="IoT-MD-001.local"', self.module.HTML)
+        self.assertIn('<label>Hostname<input name="host"', self.module.HTML)
+        self.assertNotIn('without https://', self.module.HTML)
+        self.assertIn('name="description" maxlength="256"', self.module.HTML)
         self.assertNotIn('placeholder="e.g.', self.module.HTML)
         self.assertNotIn('name="ca_path"', self.module.HTML)
         self.assertNotIn('name="cert_path"', self.module.HTML)
@@ -202,7 +205,7 @@ for (const status of ['complete','running']) {
         functions = '\n'.join(
             line for line in script.splitlines()
             if line.startswith(('function deviceConnectionBadges(',
-                                'function renderDevices(', 'async function pollDevice('))
+                                'async function pollDevice('))
         )
         check = subprocess.run([runtime, '-e', '''
 const assert = require('node:assert/strict');
@@ -213,18 +216,18 @@ const document = {getElementById:()=>box};
 const esc = value => String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
 const deviceSchedule=()=>'', when=()=>'', deviceBackupPanels=()=>'';
 const replacePreservingDetails = (node,html) => node.innerHTML=html;
+const renderDevices=()=>box.innerHTML=state.devices.map(deviceConnectionBadges).join('');
 let metrics=0, calls=0, finish;
 const renderMetrics=()=>metrics++;
 let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
 ''' + functions + '''
 (async()=>{
   renderDevices();
-  const header=box.innerHTML.split('<div class="device-sections">')[0];
+  const header=box.innerHTML;
   assert.match(header, /device-status-actions/);
   assert.match(header, /Unavailable/);
   assert.match(header, /class="badge device-retry/);
   assert.equal(box.innerHTML.split('device-retry').length-1,1);
-  assert.ok(!box.innerHTML.split('<div class="device-sections">')[1].includes('Retry connection'));
   const button = {};
   const pending = pollDevice(device.id,button);
   assert.equal(calls,1);
@@ -237,6 +240,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
   await pending;
   assert.equal(state.devices[0].last_seen,123);
   assert.match(box.innerHTML,/Healthy/);
+  assert.ok(!box.innerHTML.includes('device-retry'));
   assert.ok(!box.innerHTML.includes('Retrying'));
   assert.ok(!box.innerHTML.includes('device-connection-error'));
   assert.equal(deviceRetries.size,0);
@@ -245,7 +249,8 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
   finish({device:{...device,last_error:'Device still unavailable'}});
   await failed;
   assert.match(box.innerHTML,/Unavailable/);
-  assert.match(box.innerHTML,/Device still unavailable/);
+  assert.equal(state.devices[0].last_error,'Device still unavailable');
+  assert.match(box.innerHTML,/class="badge device-retry/);
   assert.equal(deviceRetries.size,0);
   api=async()=>{throw new Error('<server error>')};
   await pollDevice(device.id,{});
@@ -445,7 +450,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertNotIn('${statusBadge(firstResult.status)}', self.module.HTML)
 
     def test_live_fleet_progress_uses_per_device_completion_and_keeps_disclosures_open(self):
-        self.assertIn("thresholds=[0,2,3,4]", self.module.HTML)
+        self.assertIn("thresholds=[0,2,4,4]", self.module.HTML)
         self.assertIn(
             'Math.max(Number(value.milestone_rank)||0,ranks[value.status]??0)',
             self.module.HTML,
@@ -915,7 +920,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
             'format_version': 6, 'target_board': 'esp32-s3',
             'min_recovery_api': 6, 'max_recovery_api': 6,
             'version': '2.3.0', 'release_sequence': 23000,
-            'minimum_core_api': 9, 'minimum_config_api': 3,
+            'minimum_core_api': 13, 'minimum_config_api': 3,
             'maximum_config_api': 3,
             'components': {'runtime': 60, 'modules': {}},
             'files': [{
@@ -927,7 +932,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         core_manifest = sign_manifest('iotcore', {
             'format_version': 6, 'target_board': 'esp32-s3',
             'version': '2.3.0', 'release_sequence': 23000,
-            'minimum_core_api': 9, 'size': len(core_payload),
+            'minimum_core_api': 12, 'size': len(core_payload),
             'sha256': hashlib.sha256(core_payload).hexdigest(),
         })
 
@@ -940,7 +945,9 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
 
         app = bundle('application-2.3.0.iotapp', b'IOTA1\n', app_manifest, app_payload)
         core = bundle('iotmd-core-2.3.0.iotcore', b'IOTC1\n', core_manifest, core_payload)
-        universal_payload = core.read_bytes() + app.read_bytes()
+        paired_manifest = sign_manifest('iotapp', dict(app_manifest, minimum_core_api=12))
+        paired_app = bundle('paired-application.iotapp', b'IOTA1\n', paired_manifest, app_payload)
+        universal_payload = core.read_bytes() + paired_app.read_bytes()
         universal_manifest = sign_manifest('iotuni', {
             'format_version': 3, 'target_board': 'esp32-s3',
             'version': '2.3.0', 'release_sequence': 23000,
@@ -951,8 +958,8 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
             },
             'application': {
                 'version': '2.3.0', 'release_sequence': 23000,
-                'size': app.stat().st_size,
-                'sha256': hashlib.sha256(app.read_bytes()).hexdigest(),
+                'size': paired_app.stat().st_size,
+                'sha256': hashlib.sha256(paired_app.read_bytes()).hexdigest(),
             },
             'activation_order': ['application', 'firmware'],
             'maintenance_required': False, 'rollback_policy': 'paired',
@@ -997,6 +1004,9 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertEqual(inventory['catalogs'], [document])
         self.assertEqual(len(document['releases']), 3)
         self.assertEqual(document['type'], 'universal')
+        self.assertEqual(document['minimum_core_api'], 12)
+        self.assertEqual(document['releases'][1]['minimum_core_api'], 13)
+        self.assertEqual(universal_details['component_manifests']['application']['minimum_core_api'], 12)
         self.assertEqual(
             [release['type'] for release in document['releases']],
             ['universal', 'application', 'firmware'],
@@ -1242,6 +1252,28 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         )
         restored.delete_profile('Production')
         self.assertEqual(restored.list_profiles(), [])
+
+    def test_device_description_follows_device_unless_overridden_and_survives_migration(self):
+        path = Path(self.temp.name) / 'device-descriptions.db'
+        store = self.module.FleetStore(path)
+        store.register({'id': 'IoT-MD-001', 'host': 'IoT-MD-001.local'})
+        store.connection.execute('ALTER TABLE devices DROP COLUMN description')
+        store.connection.commit()
+        store.close()
+        store = self.module.FleetStore(path)
+        self.addCleanup(store.close)
+        self.assertEqual(store.count_devices(), 1)
+        self.assertEqual(store.get_device('IoT-MD-001')['description'], '')
+        inventory = {'device': {'device_description': 'Boiler controller'}}
+        store.record_poll('IoT-MD-001', inventory, {}, {'events': []})
+        self.assertEqual(store.get_device('IoT-MD-001')['description'], 'Boiler controller')
+        self.assertEqual(store.get_device('IoT-MD-001')['description_override'], '')
+        store.update_device('IoT-MD-001', {'description': 'Ground floor boiler'})
+        inventory['device']['device_description'] = 'Heating controller'
+        store.record_poll('IoT-MD-001', inventory, {}, {'events': []})
+        self.assertEqual(store.get_device('IoT-MD-001')['description'], 'Ground floor boiler')
+        store.update_device('IoT-MD-001', {'description': ''})
+        self.assertEqual(store.get_device('IoT-MD-001')['description'], 'Heating controller')
 
     def test_selective_profile_and_certificate_material_are_encrypted(self):
         import base64
@@ -1601,7 +1633,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertEqual(result['status'], 'checking')
         self.assertEqual(result['milestone_rank'], 3)
 
-    def test_install_now_connection_loss_is_shown_as_device_restart(self):
+    def test_install_now_connection_loss_does_not_imply_staging_completed(self):
         from fleet_service import FleetController
 
         store = self.module.FleetStore(Path(self.temp.name) / 'restart.db')
@@ -1622,9 +1654,44 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         controller._mark_immediate_install_restart('device-1')
 
         result = store.get_deployment(deployment['id'])['results']['device-1']
-        self.assertEqual(result['status'], 'installing')
-        self.assertEqual(result['milestone_rank'], 3)
-        self.assertIn('waiting to confirm', result['detail'])
+        self.assertEqual(result['status'], 'staging')
+        self.assertEqual(result['milestone_rank'], 1)
+        self.assertEqual(result['update_milestones'], [])
+
+    def test_universal_progress_is_scoped_durable_and_not_confirmed_during_trial(self):
+        from fleet_service import FleetController
+
+        store = self.module.FleetStore(Path(self.temp.name) / 'universal-progress.db')
+        self.addCleanup(store.close)
+        deployment = store.create_deployment({'activation': 'now', 'update': {
+            'release_sequence': 2804, 'release_type': 'universal',
+            'version': '3.0.0-alpha.99', 'channel': 'alpha',
+        }}, ['device-1'])
+        controller = FleetController(store, mock.Mock())
+        command = {'id': 'download', 'action': 'download-update',
+                   'release_type': 'universal', 'release_sequence': 2804}
+        record = {'inventory': {'device': {'release_sequence': 2803,
+            'firmware_release_sequence': 2803, 'update_progress': {
+                'release_sequence': 2804, 'type': 'universal',
+                'phase': 'core_verify', 'completed': ['queued', 'inspect', 'core_write'],
+            }}}, 'fleet': {'policy': {'commands': [command]}, 'pending_commands': [command]}}
+        controller._reconcile_deployments('device-1', record)
+        result = store.get_deployment(deployment['id'])['results']['device-1']
+        self.assertEqual(result['update_milestones'], ['queued', 'inspect', 'core_write'])
+        self.assertIn('Verifying core', result['detail'])
+        record['inventory']['device']['update_progress']['release_sequence'] = 2803
+        record['inventory']['device']['update_progress']['completed'] = ['pair', 'install']
+        controller._reconcile_deployments('device-1', record)
+        result = store.get_deployment(deployment['id'])['results']['device-1']
+        self.assertNotIn('pair', result['update_milestones'])
+        record['inventory']['device'].update({'release_sequence': 2804, 'firmware_release_sequence': 2804})
+        record['inventory']['device']['update_progress']['universal_status'] = 'activating'
+        self.assertFalse(controller._update_installed(record, deployment['update']))
+        record['inventory']['device']['update_progress']['universal_status'] = 'idle'
+        controller._reconcile_deployments('device-1', record)
+        result = store.get_deployment(deployment['id'])['results']['device-1']
+        self.assertEqual(result['status'], 'complete')
+        self.assertIn('install', result['update_milestones'])
 
     def test_install_now_is_recorded_as_all_day_admin_override(self):
         from fleet_service import FleetController

@@ -58,6 +58,7 @@ class FleetRepository:
                 CREATE TABLE IF NOT EXISTS devices (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
                     host TEXT NOT NULL,
                     port INTEGER NOT NULL,
                     ca_path TEXT NOT NULL,
@@ -158,6 +159,11 @@ class FleetRepository:
                 CREATE INDEX IF NOT EXISTS backups_device_created
                     ON backups(device_id,created_at DESC,id DESC);
             ''')
+            device_columns = {
+                row['name'] for row in self.connection.execute('PRAGMA table_info(devices)').fetchall()
+            }
+            if 'description' not in device_columns:
+                self.connection.execute("ALTER TABLE devices ADD COLUMN description TEXT NOT NULL DEFAULT ''")
             rollout_columns = {
                 row['name'] for row in self.connection.execute(
                     'PRAGMA table_info(rollouts)'
@@ -319,6 +325,10 @@ class FleetRepository:
         for field in ('inventory', 'health', 'fleet'):
             value[field] = _object(value[field], {})
         if public:
+            value['description_override'] = value.get('description', '')
+            value['description'] = value['description_override'] or str(
+                (value['inventory'].get('device') or {}).get('device_description', '')
+            )[:256]
             for field in ('ca_path', 'cert_path', 'key_path'):
                 value.pop(field, None)
         return value
@@ -361,17 +371,18 @@ class FleetRepository:
             str(record.get('key_path') or '')[:512],
             str(record.get('cohort') or 'default')[:64],
             1 if record.get('enabled', True) else 0,
+            str(record.get('description') or '').strip()[:256],
         )
         with self.lock, self.connection:
             self.connection.execute('''
                 INSERT INTO devices(
-                    id,name,host,port,ca_path,cert_path,key_path,cohort,enabled
-                ) VALUES(?,?,?,?,?,?,?,?,?)
+                    id,name,host,port,ca_path,cert_path,key_path,cohort,enabled,description
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name, host=excluded.host, port=excluded.port,
                     ca_path=excluded.ca_path, cert_path=excluded.cert_path,
                     key_path=excluded.key_path, cohort=excluded.cohort,
-                    enabled=excluded.enabled
+                    enabled=excluded.enabled, description=excluded.description
             ''', values)
         return self.get_device(identifier)
 
@@ -379,7 +390,7 @@ class FleetRepository:
         current = self.get_device(identifier, public=False)
         if not current:
             raise ValueError('device is not registered')
-        allowed = {'name', 'host', 'port', 'cohort', 'enabled'}
+        allowed = {'name', 'description', 'host', 'port', 'cohort', 'enabled'}
         unknown = set(changes) - allowed
         if unknown:
             raise ValueError('unsupported device field: ' + sorted(unknown)[0])
@@ -589,7 +600,7 @@ class FleetRepository:
             ''', (limit,)).fetchall()
         return [self._deployment(row) for row in rows]
 
-    def set_deployment_target(self, identifier, device_id, status, detail=''):
+    def set_deployment_target(self, identifier, device_id, status, detail='', progress=None):
         terminal = {'complete', 'failed', 'staged'}
         milestone_ranks = {
             'queued': 0, 'active': 0, 'running': 0,
@@ -614,6 +625,17 @@ class FleetRepository:
                 'status': str(status)[:32], 'detail': str(detail)[:256],
                 'updated_at': self.now(), 'milestone_rank': milestone_rank,
             }
+            milestones = list(previous_result.get('update_milestones', ()))
+            allowed = ('queued', 'inspect', 'core_write', 'core_verify',
+                       'application_download', 'application_verify', 'pair',
+                       'install', 'complete')
+            if progress is not None:
+                milestones = [name for name in allowed if name in milestones or
+                              name in progress.get('completed', ())]
+            deployment['results'][device_id]['update_milestones'] = milestones
+            deployment['results'][device_id]['update_phase'] = str(
+                (progress or {}).get('phase', previous_result.get('update_phase', ''))
+            )[:40]
             states = [
                 value.get('status', 'queued')
                 for value in deployment['results'].values()

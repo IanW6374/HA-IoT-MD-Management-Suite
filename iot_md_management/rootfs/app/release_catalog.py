@@ -1,6 +1,7 @@
 """Verified GitHub release import and Management-Suite-signed catalogs."""
 
 import hashlib
+import io
 import json
 import os
 import re
@@ -180,10 +181,23 @@ class ArtifactVerifier:
         path = Path(path)
         public_key = _raw_public_key(self.public_key_path)
         with path.open('rb') as stream:
+            details = self._verify_stream(stream, public_key)
+        details.update({
+            'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+            'size': path.stat().st_size,
+        })
+        return details
+
+    def _verify_stream(self, stream, public_key, nested=False):
+        # Inner bundles determine the universal bundle's staging requirements;
+        # the separately published application may require the *new* core.
+        with stream:
             magic = stream.read(6)
             release_type = MAGIC_TYPES.get(magic)
             if not release_type:
                 raise ValueError('asset is not an IoT-MD release bundle')
+            if nested and release_type == 'universal':
+                raise ValueError('nested universal bundles are not supported')
             manifest_size = int.from_bytes(stream.read(4), 'big')
             if not 0 < manifest_size <= 65535:
                 raise ValueError('bundle manifest length is invalid')
@@ -200,6 +214,7 @@ class ArtifactVerifier:
                 raise ValueError('bundle version or release sequence is invalid')
             _verify_signature(public_key, TYPE_NAMES[release_type], manifest)
             signed_content = bytearray()
+            component_manifests = {}
             if release_type == 'application':
                 for entry in manifest.get('files', []):
                     size = int(entry.get('size', -1))
@@ -226,14 +241,20 @@ class ArtifactVerifier:
                         raise ValueError('universal ' + name + ' payload is truncated')
                     if hashlib.sha256(payload).hexdigest() != str(component.get('sha256', '')).lower():
                         raise ValueError('universal ' + name + ' payload hash failed')
+                    inner = self._verify_stream(io.BytesIO(payload), public_key, nested=True)
+                    if (inner['kind'] != name or inner['version'] != manifest['version'] or
+                            inner['release_sequence'] != sequence or
+                            component.get('version') != manifest['version'] or
+                            int(component.get('release_sequence', 0)) != sequence):
+                        raise ValueError('universal ' + name + ' metadata does not match')
+                    component_manifests[name] = inner['manifest']
                     signed_content.extend(payload)
             if stream.read(1):
                 raise ValueError('bundle contains unsigned trailing content')
         return {
             'kind': release_type, 'version': str(manifest['version']),
             'release_sequence': sequence, 'manifest': manifest,
-            'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
-            'size': path.stat().st_size,
+            'component_manifests': component_manifests,
             'source_revision': _source_revision(signed_content),
         }
 
@@ -338,25 +359,26 @@ class ReleaseCatalog:
         )
         if not kinds:
             raise ValueError('release has no verified update bundle')
-        manifests = {
+        verified = {
             kind: self.verifier.verify(
                 self.release_root / 'bundles' / assets[kind]['name']
-            )['manifest'] for kind in kinds
+            ) for kind in kinds
         }
         for kind in kinds:
             asset = assets[kind]
-            manifest = manifests[kind]
-            compatibility = (
-                manifests.get('application', manifest)
-                if kind == 'universal' else manifest
-            )
+            manifest = verified[kind]['manifest']
+            components = verified[kind]['component_manifests']
+            compatibility = components['application'] if kind == 'universal' else manifest
+            minimum_core = int(compatibility.get('minimum_core_api', 9))
+            if kind == 'universal':
+                minimum_core = max(minimum_core, int(components['firmware'].get('minimum_core_api', 9)))
             descriptor = {
                 'format_version': 3, 'target_board': TARGET_BOARD,
                 'channel': channel, 'type': kind, 'version': release['version'],
                 'release_sequence': int(release['release_sequence']),
                 'url': self.base_url + '/bundles/' + asset['name'],
                 'size': int(asset['size']), 'sha256': asset['sha256'],
-                'minimum_core_api': int(compatibility.get('minimum_core_api', 9)),
+                'minimum_core_api': minimum_core,
                 'minimum_config_api': int(compatibility.get('minimum_config_api', 3)),
                 'maximum_config_api': int(compatibility.get('maximum_config_api', 3)),
                 'notes': 'GitHub ' + release['tag'] + ' · Source: ' + release['source_revision'],

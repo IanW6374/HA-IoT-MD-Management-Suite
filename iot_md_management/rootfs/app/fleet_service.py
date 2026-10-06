@@ -287,6 +287,10 @@ class FleetController:
         release_type = update.get('release_type', '')
         application = int(device.get('release_sequence', 0) or 0)
         firmware = int(device.get('firmware_release_sequence', 0) or 0)
+        progress = device.get('update_progress') or {}
+        if any(progress.get(name) in ('trial', 'activating', 'committing') for name in (
+                'application_status', 'firmware_status', 'universal_status')):
+            return False
         if release_type == 'application':
             return application >= sequence
         if release_type == 'firmware':
@@ -306,10 +310,10 @@ class FleetController:
             current = (deployment.get('results', {}).get(identifier, {}) or {}).get(
                 'status', ''
             )
-            if current in ('checking', 'staging', 'scheduled', 'installing'):
+            if current in ('scheduled', 'installing'):
                 self.store.set_deployment_target(
                     deployment['id'], identifier, 'installing',
-                    'Device is restarting; waiting to confirm the installed version'
+                    'Device unavailable; waiting to confirm the installed version'
                 )
 
     def _reconcile_deployments(self, identifier, record):
@@ -325,6 +329,11 @@ class FleetController:
             ):
                 continue
             update = deployment.get('update') or {}
+            progress = ((record.get('inventory') or {}).get('device') or {}).get('update_progress') or {}
+            progress = progress if (
+                int(progress.get('release_sequence', 0) or 0) == int(update.get('release_sequence', 0)) and
+                progress.get('type') == update.get('release_type')
+            ) else {}
             if not update:
                 self.store.set_deployment_target(
                     deployment['id'], identifier, 'complete', 'Profile applied'
@@ -333,7 +342,10 @@ class FleetController:
             if self._update_installed(record, update):
                 self.store.set_deployment_target(
                     deployment['id'], identifier, 'complete',
-                    (update.get('version') or 'Update') + ' installed'
+                    (update.get('version') or 'Update') + ' installed',
+                    progress={'completed': ['queued', 'inspect', 'core_write',
+                        'core_verify', 'application_download', 'application_verify',
+                        'pair', 'install', 'complete'], 'phase': 'complete'}
                 )
                 continue
             sequence = int(update.get('release_sequence', 0))
@@ -358,7 +370,7 @@ class FleetController:
                     'detail', 'The device stopped this deployment.'
                 )
                 self.store.set_deployment_target(
-                    deployment['id'], identifier, 'failed', detail
+                    deployment['id'], identifier, 'failed', detail, progress=progress
                 )
                 continue
             if pending:
@@ -378,20 +390,41 @@ class FleetController:
                     'scheduled': 'Staged; waiting for the device update schedule',
                     'active': 'Deployment active',
                 }[status]
+                if action == 'download-update' and progress.get('phase'):
+                    detail = {
+                        'core_write': 'Downloading and writing core firmware',
+                        'core_verify': 'Verifying core firmware',
+                        'application_download': 'Downloading application',
+                        'application_verify': 'Verifying and staging application',
+                        'pair': 'Pairing verified components',
+                    }.get(progress['phase'], detail)
+                if action == 'activate-update':
+                    progress = dict(progress)
+                    progress['completed'] = ['queued', 'inspect', 'core_write',
+                        'core_verify', 'application_download', 'application_verify', 'pair']
                 self.store.set_deployment_target(
-                    deployment['id'], identifier, status, detail
+                    deployment['id'], identifier, status, detail, progress=progress
                 )
                 continue
             if matching and deployment['activation'] == 'stage':
                 self.store.set_deployment_target(
                     deployment['id'], identifier, 'staged',
-                    'Update staged for later activation'
+                    'Update staged for later activation', progress={'phase': 'pair',
+                        'completed': ['queued', 'inspect', 'core_write', 'core_verify',
+                            'application_download', 'application_verify', 'pair']}
                 )
                 continue
             if matching:
+                self.store.set_deployment_target(
+                    deployment['id'], identifier, 'installing',
+                    'Waiting for core and application confirmation' if release_type == 'universal'
+                    else 'Waiting to confirm the installed version', progress=progress
+                )
                 completed_at = int((fleet.get('last_result') or {}).get('time', 0) or 0)
                 returned_at = int(record.get('last_seen', 0) or 0)
-                if completed_at and returned_at > completed_at + 30:
+                trial_active = any(progress.get(name) in ('trial', 'activating', 'committing')
+                    for name in ('application_status', 'firmware_status', 'universal_status'))
+                if completed_at and returned_at > completed_at + 30 and not trial_active:
                     self.store.set_deployment_target(
                         deployment['id'], identifier, 'failed',
                         'Device returned on its previous version'
@@ -533,6 +566,10 @@ class FleetController:
             actions = ['check-update', 'download-update']
             if activation != 'stage':
                 actions.append('activate-update')
+            self.store.set_deployment_target(
+                deployment_id, identifier, 'checking',
+                'Deployment accepted; checking update compatibility'
+            )
             self.apply_policy({
                 'device_id': identifier, 'channel': update.get('channel', 'alpha'),
                 'weekdays': window['weekdays'],
@@ -546,10 +583,7 @@ class FleetController:
                     'release_type': update['release_type'],
                 } for action in actions],
             })
-            return self.store.set_deployment_target(
-                deployment_id, identifier, 'checking',
-                'Deployment accepted; checking update compatibility'
-            )
+            return self.store.get_deployment(deployment_id)['results'][identifier]
         except Exception as exc:
             self.store.set_deployment_target(
                 deployment_id, identifier, 'failed', bounded_text(exc)
