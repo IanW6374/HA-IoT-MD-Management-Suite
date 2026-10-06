@@ -437,7 +437,8 @@ class Handler(BaseHTTPRequestHandler):
                     {'cohort': result['cohort']}
                 )
                 threading.Thread(
-                    target=CONTROLLER.poll_device, args=(result['id'],), daemon=True
+                    target=CONTROLLER.complete_enrollment,
+                    args=(result['id'], str(request.get('description') or '').strip()), daemon=True
                 ).start()
                 self._json(201, result)
             elif path == '/api/policy':
@@ -561,7 +562,7 @@ class Handler(BaseHTTPRequestHandler):
             if not identifier or '/' in identifier:
                 raise ValueError('device id is invalid')
             changes = self._body()
-            result = STORE.update_device(identifier, changes)
+            result = CONTROLLER.update_device(identifier, changes)
             STORE.record_audit(
                 'device.updated', 'complete', identifier, '', changes
             )

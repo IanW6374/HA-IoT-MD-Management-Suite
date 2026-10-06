@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.8.13', addon)
+        self.assertIn('version: 2.8.14', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -192,7 +192,8 @@ for (const status of ['complete','running']) {
         self.assertIn('Management ID', self.module.HTML)
         self.assertIn('immutable device identity', self.module.HTML)
         self.assertIn('Retry connection', self.module.HTML)
-        self.assertIn("button.textContent='Retrying…'", self.module.HTML)
+        self.assertIn("button.setAttribute('aria-busy','true')", self.module.HTML)
+        self.assertIn('<svg viewBox="0 0 24 24" aria-hidden="true"', self.module.HTML)
         self.assertIn('device-status-actions', self.module.HTML)
         self.assertIn('class="badge device-retry', self.module.HTML)
         self.assertIn('>Remove</button>', self.module.HTML)
@@ -228,12 +229,12 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
   assert.match(header, /Unavailable/);
   assert.match(header, /class="badge device-retry/);
   assert.equal(box.innerHTML.split('device-retry').length-1,1);
-  const button = {};
+  const button = {setAttribute(){}};
   const pending = pollDevice(device.id,button);
   assert.equal(calls,1);
   assert.equal(button.disabled,true);
   renderDevices(); // Same refresh used by the periodic data reload.
-  assert.match(box.innerHTML,/aria-busy="true" disabled>Retrying/);
+  assert.match(box.innerHTML,/aria-busy="true" disabled><svg/);
   await pollDevice(device.id,{});
   assert.equal(calls,1); // No duplicate request when cards are replaced.
   finish({device:{...device,last_error:'',last_seen:123}});
@@ -245,7 +246,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
   assert.ok(!box.innerHTML.includes('device-connection-error'));
   assert.equal(deviceRetries.size,0);
   assert.equal(metrics,1);
-  const failed=pollDevice(device.id,{});
+  const failed=pollDevice(device.id,{setAttribute(){}});
   finish({device:{...device,last_error:'Device still unavailable'}});
   await failed;
   assert.match(box.innerHTML,/Unavailable/);
@@ -253,8 +254,8 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
   assert.match(box.innerHTML,/class="badge device-retry/);
   assert.equal(deviceRetries.size,0);
   api=async()=>{throw new Error('<server error>')};
-  await pollDevice(device.id,{});
-  assert.match(box.innerHTML,/Retry failed/);
+  await pollDevice(device.id,{setAttribute(){}});
+  assert.match(box.innerHTML,/<svg/);
   assert.match(box.innerHTML,/title="&lt;server error>/);
   assert.ok(!box.innerHTML.includes('aria-busy="true"'));
   assert.equal(deviceRetries.get(device.id).pending,false);
@@ -1253,7 +1254,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         restored.delete_profile('Production')
         self.assertEqual(restored.list_profiles(), [])
 
-    def test_device_description_follows_device_unless_overridden_and_survives_migration(self):
+    def test_device_description_is_authoritative_and_survives_migration(self):
         path = Path(self.temp.name) / 'device-descriptions.db'
         store = self.module.FleetStore(path)
         store.register({'id': 'IoT-MD-001', 'host': 'IoT-MD-001.local'})
@@ -1267,13 +1268,98 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         inventory = {'device': {'device_description': 'Boiler controller'}}
         store.record_poll('IoT-MD-001', inventory, {}, {'events': []})
         self.assertEqual(store.get_device('IoT-MD-001')['description'], 'Boiler controller')
-        self.assertEqual(store.get_device('IoT-MD-001')['description_override'], '')
+        self.assertNotIn('description_override', store.get_device('IoT-MD-001'))
         store.update_device('IoT-MD-001', {'description': 'Ground floor boiler'})
         inventory['device']['device_description'] = 'Heating controller'
         store.record_poll('IoT-MD-001', inventory, {}, {'events': []})
-        self.assertEqual(store.get_device('IoT-MD-001')['description'], 'Ground floor boiler')
-        store.update_device('IoT-MD-001', {'description': ''})
         self.assertEqual(store.get_device('IoT-MD-001')['description'], 'Heating controller')
+        inventory['device']['device_description'] = ''
+        store.record_poll('IoT-MD-001', inventory, {}, {'events': []})
+        self.assertEqual(store.get_device('IoT-MD-001')['description'], '')
+        store.record_poll('IoT-MD-001', {'device': {}}, {}, {'events': []})
+        self.assertEqual(store.get_device('IoT-MD-001')['description'], 'Ground floor boiler')
+
+    def test_description_edits_write_to_device_and_preserve_poll_metadata(self):
+        from fleet_service import FleetController
+        store = self.module.STORE
+        store.register({'id': 'description-device', 'host': 'old.local'})
+        store.record_poll('description-device', {
+            'device': {'device_description': 'Old'}, 'configuration': {},
+        }, {'ready': True}, {'events': []})
+        store.set_device_error('description-device', 'Previous poll error')
+        before = store.get_device('description-device')
+        client = mock.Mock()
+        client.request.return_value = {'accepted': True, 'profile': {
+            'applied_settings': ['device_description'], 'restart_required': False,
+        }}
+        controller = FleetController(store, None)
+        controller._client = mock.Mock(return_value=client)
+        result = controller.update_device('description-device', {
+            'description': ' New description ', 'host': 'new.local',
+        })
+        self.assertEqual(result['description'], 'New description')
+        self.assertEqual(result['inventory']['configuration']['device_description'], 'New description')
+        self.assertEqual(result['host'], 'new.local')
+        self.assertEqual(controller._client.call_args.args[0]['host'], 'old.local')
+        client.request.assert_called_once_with('/api/v2/configuration/profile', 'POST', {
+            'format_version': 1, 'name': 'Device description',
+            'settings': {'device_description': 'New description'},
+        })
+        for key in ('last_seen', 'health', 'fleet', 'event_cursor', 'last_error'):
+            self.assertEqual(result[key], before[key])
+        client.reset_mock()
+        controller.update_device('description-device', {'description': 'New description', 'cohort': 'test'})
+        client.request.assert_not_called()
+        self.assertEqual(controller.update_device('description-device', {'description': ''})['description'], '')
+        self.assertEqual(client.request.call_args.args[2]['settings']['device_description'], '')
+
+    def test_description_rejection_keeps_local_edits_unsaved(self):
+        from fleet_service import FleetController
+        store = self.module.STORE
+        store.register({'id': 'description-errors', 'host': 'old.local'})
+        controller = FleetController(store, None)
+        client = mock.Mock()
+        controller._client = mock.Mock(return_value=client)
+        for response in ({'accepted': False}, {'accepted': True, 'profile': {}}):
+            client.request.return_value = response
+            with self.assertRaisesRegex(ValueError, 'did not accept'):
+                controller.update_device('description-errors', {'description': 'New', 'name': 'Changed'})
+            self.assertEqual(store.get_device('description-errors')['name'], 'description-errors')
+            self.assertEqual(store.get_device('description-errors')['description'], '')
+        client.request.side_effect = RuntimeError('API-write permission required')
+        with self.assertRaisesRegex(RuntimeError, 'API-write'):
+            controller.update_device('description-errors', {'description': 'New'})
+        client.reset_mock()
+        for changes in ({'description': 'x' * 257}, {'description': 'New', 'port': 70000}):
+            with self.assertRaises(ValueError):
+                controller.update_device('description-errors', changes)
+        client.request.assert_not_called()
+
+    def test_blank_enrollment_discovers_description_without_writing(self):
+        from fleet_service import FleetController
+        store = self.module.STORE
+        store.register({'id': 'description-enrollment', 'host': 'device.local'})
+        controller = FleetController(store, None)
+        def poll(identifier):
+            store.record_poll(identifier, {'device': {'device_description': 'Discovered'}}, {}, {'events': []})
+        controller.poll_device = mock.Mock(side_effect=poll)
+        controller.update_device = mock.Mock()
+        controller.complete_enrollment('description-enrollment')
+        self.assertEqual(store.get_device('description-enrollment')['description'], 'Discovered')
+        controller.update_device.assert_not_called()
+        controller.complete_enrollment('description-enrollment', 'Explicit')
+        controller.update_device.assert_called_once_with('description-enrollment', {'description': 'Explicit'}, force_description=True)
+
+    def test_device_table_and_edit_form_have_consistent_controls(self):
+        html = self.module.HTML
+        self.assertIn('<th scope="col">Hostname</th><th scope="col">Status</th><th scope="col">Description</th>', html)
+        self.assertIn('text-overflow:ellipsis;white-space:nowrap', html)
+        self.assertIn('height:42px;min-height:42px', html)
+        self.assertIn('align-content:start;grid-auto-rows:max-content', html)
+        self.assertIn('class="check device-enabled"', html)
+        card = html.split('function renderDeviceCard(', 1)[1].split('const deviceView=', 1)[0]
+        self.assertNotIn('Leave blank', card)
+        self.assertIn("esc(device.description||'')", card)
 
     def test_selective_profile_and_certificate_material_are_encrypted(self):
         import base64

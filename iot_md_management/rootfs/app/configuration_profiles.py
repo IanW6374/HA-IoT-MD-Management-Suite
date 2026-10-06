@@ -94,6 +94,7 @@ def normalize_profile(profile):
             normalized[name] = _text(
                 settings[name], name, maximum,
                 allow_empty=name in (
+                    'device_description',
                     'wifi_ip_address', 'wifi_subnet_mask', 'wifi_gateway',
                     'wifi_dns_server', 'mqtt_server', 'mqtt_username',
                     'syslog_host', 'acme_directory_url',

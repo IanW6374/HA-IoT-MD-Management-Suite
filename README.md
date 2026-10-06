@@ -15,6 +15,15 @@ Successful synchronization treats the GitHub Releases list as authoritative:
 releases deleted upstream are removed from verified inventory together with
 their unreferenced local files and obsolete channel catalogs.
 
+## Device settings
+
+Device summaries use the hostname, connection status and a truncated description.
+Select a hostname to open its settings, backup schedule and recovery points.
+The description comes from the device when enrollment leaves it blank. Editing
+or clearing it later writes to the enrolled device's configuration API, which
+requires API-write permission; failed writes keep the unsaved edits visible.
+The Management name remains a local label, independent of the device description.
+
 ## Profiles and complete backups
 
 Profiles are reusable configuration patches or baselines. The profile builder

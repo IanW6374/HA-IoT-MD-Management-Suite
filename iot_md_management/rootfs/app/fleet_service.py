@@ -247,6 +247,38 @@ class FleetController:
         )
         return {'preview': preview, 'result': result}
 
+    def complete_enrollment(self, identifier, description=''):
+        self.poll_device(identifier)
+        if description:
+            try:
+                self.update_device(identifier, {'description': description}, force_description=True)
+            except Exception as exc:
+                self.store.set_device_error(identifier, device_connection_error(exc))
+                self.store.record_audit('device.description.updated', 'failed', identifier, '',
+                    {'error': bounded_text(exc)})
+
+    def update_device(self, identifier, changes, force_description=False):
+        candidate = self.store.prepare_device_update(identifier, changes)
+        current = self.store.get_device(identifier)
+        description = str(candidate.get('description') or '').strip()
+        changed = 'description' in changes and (
+            force_description or description != current.get('description', '')
+        )
+        if changed:
+            # Metadata belongs to the enrolled device, not a newly edited address.
+            record = self.store.get_device(identifier, public=False)
+            result = self._client(record).request('/api/v2/configuration/profile', 'POST', {
+                'format_version': 1, 'name': 'Device description',
+                'settings': {'device_description': description},
+            })
+            if not result.get('accepted') or 'device_description' not in (
+                    result.get('profile') or {}).get('applied_settings', []):
+                raise ValueError('Device did not accept the description update')
+        self.store.update_device(identifier, changes)
+        if changed:
+            self.store.record_device_description(identifier, description)
+        return self.store.get_device(identifier)
+
     def poll_device(self, identifier):
         record = self.store.get_device(identifier, public=False)
         if not record:

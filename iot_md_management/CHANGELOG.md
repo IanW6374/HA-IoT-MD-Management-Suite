@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 2.8.14
+
+- Simplify device summaries to Hostname, Status and a truncated Description,
+  followed by installed versions, cohort and last seen. Use an accessible
+  refresh icon for retrying unavailable devices.
+- Save description changes (including clearing the field) to the enrolled
+  device through its configuration API. Discover the description on blank
+  enrollment; preserve unsaved edits and show failures if the device rejects
+  the write. Remove the enrollment-only helper from existing device settings.
+- Align form labels and standardise single-line controls to 42 px. Keep
+  management toggles plain, without a surrounding settings card.
+
 ## 2.8.13
 
 - Replace device cards with a searchable table, status/cohort filters and

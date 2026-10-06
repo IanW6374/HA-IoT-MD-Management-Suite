@@ -325,10 +325,10 @@ class FleetRepository:
         for field in ('inventory', 'health', 'fleet'):
             value[field] = _object(value[field], {})
         if public:
-            value['description_override'] = value.get('description', '')
-            value['description'] = value['description_override'] or str(
-                (value['inventory'].get('device') or {}).get('device_description', '')
-            )[:256]
+            device = value['inventory'].get('device') or {}
+            value['description'] = str(device.get(
+                'device_description', value.get('description', '')
+            ))[:256]
             for field in ('ca_path', 'cert_path', 'key_path'):
                 value.pop(field, None)
         return value
@@ -354,7 +354,8 @@ class FleetRepository:
         value['administrator_override'] = bool(value['administrator_override'])
         return value
 
-    def register(self, record):
+    @staticmethod
+    def _device_values(record):
         identifier = str(record.get('id') or '')[:64]
         host = str(record.get('host') or '')[:253]
         if not identifier:
@@ -364,15 +365,24 @@ class FleetRepository:
         port = int(record.get('port', 8444))
         if not 1 <= port <= 65535:
             raise ValueError('device port is invalid')
-        values = (
+        description = record.get('description', '')
+        if description is None:
+            description = ''
+        if not isinstance(description, str) or len(description.strip()) > 256:
+            raise ValueError('device description must contain at most 256 characters')
+        return (
             identifier, str(record.get('name') or identifier)[:64], host, port,
             str(record.get('ca_path') or '')[:512],
             str(record.get('cert_path') or '')[:512],
             str(record.get('key_path') or '')[:512],
             str(record.get('cohort') or 'default')[:64],
             1 if record.get('enabled', True) else 0,
-            str(record.get('description') or '').strip()[:256],
+            description.strip(),
         )
+
+    def register(self, record):
+        values = self._device_values(record)
+        identifier = values[0]
         with self.lock, self.connection:
             self.connection.execute('''
                 INSERT INTO devices(
@@ -386,7 +396,7 @@ class FleetRepository:
             ''', values)
         return self.get_device(identifier)
 
-    def update_device(self, identifier, changes):
+    def prepare_device_update(self, identifier, changes):
         current = self.get_device(identifier, public=False)
         if not current:
             raise ValueError('device is not registered')
@@ -397,6 +407,11 @@ class FleetRepository:
         record = dict(current)
         record.update(changes)
         record['id'] = current['id']
+        self._device_values(record)
+        return record
+
+    def update_device(self, identifier, changes):
+        record = self.prepare_device_update(identifier, changes)
         return self.register(record)
 
     def get_device(self, identifier, public=True):
@@ -405,6 +420,22 @@ class FleetRepository:
                 'SELECT * FROM devices WHERE id=?', (str(identifier),)
             ).fetchone()
         return self._device(row, public)
+
+    def record_device_description(self, identifier, description):
+        """Cache an accepted metadata write without inventing a full poll."""
+        with self.lock, self.connection:
+            row = self.connection.execute('SELECT inventory FROM devices WHERE id=?',
+                (str(identifier),)).fetchone()
+            if row is None:
+                raise ValueError('device is not registered')
+            inventory = _object(row['inventory'], {})
+            inventory['device'] = dict(inventory.get('device') or {})
+            inventory['device']['device_description'] = description
+            if 'configuration' in inventory:
+                inventory['configuration'] = dict(inventory.get('configuration') or {})
+                inventory['configuration']['device_description'] = description
+            self.connection.execute('UPDATE devices SET inventory=? WHERE id=?',
+                (_json(inventory), str(identifier)))
 
     def list_devices(self, public=True):
         with self.lock:
