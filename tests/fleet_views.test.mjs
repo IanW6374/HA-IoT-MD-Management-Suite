@@ -18,6 +18,22 @@ test('API and actual device health are independent',()=>{
   assert.equal(evaluate('apiConnectionStatus(device,now).tone',{device}),'good');
   assert.equal(evaluate('deviceHealthStatus(device,now).tone',{device}),'bad');
 });
+test('baseline secrets are opt-in and include every supported password and certificate widget',()=>{
+  const entries=[{dataset:{settingName:'mqtt_password',profileKind:'secret'}},{dataset:{settingName:'wifi_password',profileKind:'secret'}},{dataset:{settingName:'certificate_portal_key',profileKind:'file'}},{dataset:{settingName:'wifi_ssid',profileKind:'text'}}];
+  assert.equal(evaluate('baselineProfileFields(entries).includes("mqtt_password")',{entries}),false);
+  for(const name of ['mqtt_password','wifi_password','certificate_portal_key'])assert.equal(evaluate(`baselineProfileFields(entries,true).includes('${name}')`,{entries}),true);
+  assert.equal(evaluate('baselineProfileFields(entries,true).includes("wifi_ssid")',{entries}),false);
+});
+test('blank baseline secrets are omitted, explicit secrets still require a value',()=>{
+  const entry={dataset:{baselineOptional:'true',profileKind:'secret'}};
+  assert.equal(evaluate('omitEmptyBaselineSecret(entry,control)',{entry,control:{value:''}}),true);
+  assert.equal(evaluate('omitEmptyBaselineSecret(entry,control)',{entry,control:{value:'secret'}}),false);
+  entry.dataset.baselineOptional='false';
+  assert.equal(evaluate('omitEmptyBaselineSecret(entry,control)',{entry,control:{value:''}}),false);
+  entry.dataset={baselineOptional:'true',profileKind:'file'};
+  assert.equal(evaluate('omitEmptyBaselineSecret(entry,control)',{entry,control:{files:[]}}),true);
+  assert.equal(evaluate('omitEmptyBaselineSecret(entry,control)',{entry,control:{files:[{}]}}),false);
+});
 test('unavailable, disabled, unpolled and stale reports cannot show healthy device LED',()=>{
   for(const changes of [{last_error:'TLS timeout'},{enabled:false},{last_seen:0},{last_seen:500}]){
     const device={...structuredClone(healthy),...changes};

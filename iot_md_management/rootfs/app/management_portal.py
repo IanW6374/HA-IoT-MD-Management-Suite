@@ -252,7 +252,7 @@ function enhanceProfileDesigner(){
   form.dataset.designer='true';
   const first=form.querySelector('.profile-group'),advanced=form.querySelector('details'),toolbar=document.createElement('section');
   toolbar.className='profile-picker';
-  toolbar.innerHTML=`<label>Add a setting<select id="profile-setting-select"><option value="">Choose a setting</option></select></label><div class="actions"><span id="profile-selected-count" class="badge">0 selected</span><button class="secondary" type="button" id="profile-add-setting">Add setting</button><button class="secondary" type="button" id="profile-baseline">Use baseline set</button></div>`;
+  toolbar.innerHTML=`<label>Add a setting<select id="profile-setting-select"><option value="">Choose a setting</option></select></label><div class="actions"><span id="profile-selected-count" class="badge">0 selected</span><button class="secondary" type="button" id="profile-add-setting">Add setting</button><label class="check"><input id="profile-baseline-secrets" type="checkbox"><span>Include secrets and certificates</span></label><button class="secondary" type="button" id="profile-baseline">Use baseline set</button></div><p class="muted">Blank baseline passwords and certificate files are not saved or pushed; existing device credentials are retained. Supplied secrets are encrypted and masked after saving.</p>`;
   first.after(toolbar);
   const entries=[...form.querySelectorAll('.profile-entry')],selector=toolbar.querySelector('#profile-setting-select'),groups=new Map();
   for(const entry of entries){
@@ -281,9 +281,11 @@ function enhanceProfileDesigner(){
     option.textContent=label;
     groups.get(section).append(option);
   }
-  function add(name){
+  function add(name,optionalSecret=false){
     const entry=entries.find(item=>item.dataset.settingName===name);
     if(!entry)return;
+    // A repeat baseline click must not weaken an explicitly selected secret.
+    if(!entry.querySelector('[data-profile-include]').checked)entry.dataset.baselineOptional=String(optionalSecret);
     entry.querySelector('[data-profile-include]').checked=true;
     entry.classList.remove('hidden');
     updateProfileDesigner();
@@ -292,6 +294,8 @@ function enhanceProfileDesigner(){
   }
   function updateProfileDesigner(){
     const selected=entries.filter(item=>item.querySelector('[data-profile-include]').checked),count=selected.length;
+    const optionalText=new Set(['device_description','wifi_ip_address','wifi_subnet_mask','wifi_gateway','wifi_dns_server','mqtt_server','mqtt_username','syslog_host','acme_directory_url','certificate_hostname','portal_certificate_hostname']);
+    for(const entry of entries){const control=entry.querySelector('[name]'),included=selected.includes(entry);control.disabled=!included;control.required=included&&control.type!=='checkbox'&&!optionalText.has(control.name)&&entry.dataset.baselineOptional!=='true'}
     document.getElementById('profile-selected-count').textContent=`${count} selected`;
     for(const group of form.querySelectorAll('.profile-group')){
       if(group===first)continue;
@@ -307,7 +311,7 @@ function enhanceProfileDesigner(){
   window.updateProfileDesigner=updateProfileDesigner;
   toolbar.querySelector('#profile-add-setting').onclick=()=>{if(selector.value){add(selector.value);selector.value=''}};
   selector.addEventListener('change',()=>{if(selector.value){add(selector.value);selector.value=''}});
-  toolbar.querySelector('#profile-baseline').onclick=()=>{['timezone_name','ntp_servers','loglevel','log_buffer_lines','ha_discovery','ha_discovery_prefix','mqtt_enabled','mqtt_port','mqtt_qos','syslog_enabled','syslog_port','syslog_transport','release_channel','release_check_schedule','release_check_time','release_auto_download','release_auto_activate','portal_transport','portal_port','portal_session_timeout_s','api_enabled','api_port','certificate_mode','certificate_method'].forEach(add)};
+  toolbar.querySelector('#profile-baseline').onclick=()=>{baselineProfileFields(entries,toolbar.querySelector('#profile-baseline-secrets').checked).forEach(name=>add(name,entries.some(entry=>entry.dataset.settingName===name&&['secret','file'].includes(entry.dataset.profileKind))))};
   updateProfileDesigner();
 }
 const backupState={items:[],settings:{},pending:null,renderSignature:''};

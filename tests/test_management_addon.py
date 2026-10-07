@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.8.17', addon)
+        self.assertIn('version: 2.8.18', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -407,7 +407,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertIn('class="nav-link nav-menu-trigger"', self.module.HTML)
         self.assertIn('data-action-nav="new"', self.module.HTML)
         self.assertIn('data-action-nav="inflight"', self.module.HTML)
-        self.assertIn('<h1 id="actions-title">New action</h1>', self.module.HTML)
+        self.assertIn('<h1 id="actions-title">Create action</h1>', self.module.HTML)
         self.assertIn('name="action_mode" value="deploy"', self.module.HTML)
         self.assertIn('name="action_mode" value="backup"', self.module.HTML)
         self.assertIn('name="action_mode" value="restore"', self.module.HTML)
@@ -420,7 +420,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertNotIn('aria-label="Deployment workflow"', self.module.HTML)
         self.assertIn('id="deployment-active"', self.module.HTML)
         self.assertNotIn('class="section-subnav"', self.module.HTML)
-        self.assertIn("title.textContent=view==='inflight'?'In-Flight actions':'New action'", self.module.HTML)
+        self.assertIn("title.textContent=view==='inflight'?'In-Flight actions':'Create action'", self.module.HTML)
         self.assertNotIn('id="deployment-history"', self.module.HTML)
         self.assertIn('id="action-history"', self.module.HTML)
         self.assertNotIn('data-page-link="policy"', self.module.HTML)
@@ -434,7 +434,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
             '<a class="metric" href="#overview-active-operations">',
             self.module.HTML,
         )
-        self.assertIn('<a class="metric" href="activity?filter=attention">', self.module.HTML)
+        self.assertIn('<a class="metric" href="logs?filter=attention">', self.module.HTML)
         self.assertIn('id="overview-active-operations"', self.module.HTML)
         self.assertNotIn('id="overview-deployments"', self.module.HTML)
         self.assertNotIn('id="overview-activity"', self.module.HTML)
@@ -483,6 +483,32 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
             'certificate_method',
         ):
             self.assertIn("'" + setting + "'", self.module.HTML)
+
+    def test_logs_menu_and_search_controls_have_separate_subpages(self):
+        html = self.module.HTML
+        self.assertIn('aria-controls="logs-menu">Logs</button>', html)
+        for view in ('activity', 'audit'):
+            self.assertIn('href="logs?view=' + view + '"', html)
+            self.assertIn('data-log-view="' + view + '"', html)
+        self.assertIn('id="action-history-search"', html)
+        self.assertIn('id="audit-search"', html)
+        self.assertIn('data-action-nav="new" href="actions?view=new">Create</a>', html)
+        self.assertIn('data-fleet-nav="new" href="profiles?view=new">Add</a>', html)
+        self.assertIn('id="profile-baseline-secrets" type="checkbox"', html)
+        self.assertIn('omitEmptyBaselineSecret(entry,control)', html)
+        self.assertIn('className = "field-requirement"', html)
+
+    def test_audit_search_matches_retained_records_before_applying_limit(self):
+        store = self.module.STORE
+        store.record_audit('device.updated', 'failed', 'needle.local', detail={'detail': 'TLS timeout 100%'})
+        for index in range(505):
+            store.record_audit('device.updated', 'complete', 'other.local')
+        found = store.list_audit(500, 'NEEDLE timeout')
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]['subject'], 'needle.local')
+        self.assertEqual(len(store.list_audit(500, '100%')), 1)
+        self.assertEqual(store.list_audit(500, "' OR 1=1 --"), [])
+        self.assertEqual(len(store.list_audit(500)), 500)
 
     def test_release_and_profile_tables_are_searchable_and_editor_is_grouped(self):
         self.assertIn('class="catalog-table release-table"', self.module.HTML)
@@ -702,7 +728,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertEqual(
             set(self.module.PORTAL_PAGES),
             {'/', '/actions', '/deploy', '/deployments', '/releases', '/devices',
-             '/profiles', '/activity', '/backups', '/settings'},
+             '/profiles', '/activity', '/logs', '/backups', '/settings'},
         )
         settings = self.module.render_portal('settings').decode()
         self.assertIn('<body data-page="settings">', settings)
@@ -2061,7 +2087,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
 
     def test_device_backup_shortcut_opens_restore_action(self):
         self.assertIn(
-            'href="activity?history=backups&backup=${item.id}#backup-${item.id}"',
+            'href="logs?history=backups&backup=${item.id}#backup-${item.id}"',
             self.module.HTML,
         )
         self.assertIn('id="backup-${item.id}"', self.module.HTML)

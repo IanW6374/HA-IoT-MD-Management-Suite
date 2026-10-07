@@ -525,13 +525,15 @@ class FleetRepository:
                     )
                 ''', (excess,))
 
-    def list_events(self, limit=500):
+    def list_events(self, limit=500, search=''):
         limit = max(1, min(self.event_retention, int(limit)))
+        words = str(search)[:256].lower().split()[:16]
+        where = ' AND '.join("instr(lower(device_id || ' ' || event), ?) > 0" for _ in words)
         with self.lock:
             rows = self.connection.execute('''
                 SELECT sequence,device_id,event,received_at FROM events
-                ORDER BY sequence DESC LIMIT ?
-            ''', (limit,)).fetchall()
+            ''' + (' WHERE ' + where if where else '') +
+                ' ORDER BY sequence DESC LIMIT ?', (*words, limit)).fetchall()
         result = []
         for row in reversed(rows):
             result.append({
@@ -559,12 +561,17 @@ class FleetRepository:
             'created_at': now,
         }
 
-    def list_audit(self, limit=500):
+    def list_audit(self, limit=500, search=''):
         limit = max(1, min(self.event_retention, int(limit)))
+        words = str(search)[:256].lower().split()[:16]
+        where = ' AND '.join(
+            "instr(lower(action || ' ' || status || ' ' || subject || ' ' || target || ' ' || detail), ?) > 0"
+            for _ in words
+        )
         with self.lock:
-            rows = self.connection.execute('''
-                SELECT * FROM audit_events ORDER BY created_at DESC,id DESC LIMIT ?
-            ''', (limit,)).fetchall()
+            rows = self.connection.execute('SELECT * FROM audit_events' +
+                (' WHERE ' + where if where else '') +
+                ' ORDER BY created_at DESC,id DESC LIMIT ?', (*words, limit)).fetchall()
         return [{
             **dict(row), 'detail': _object(row['detail'], {})
         } for row in rows]

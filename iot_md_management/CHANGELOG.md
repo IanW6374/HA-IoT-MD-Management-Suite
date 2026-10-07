@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.8.18
+
+- Split Logs into searchable Activity and Audit pages; replace completed-action
+  outcome badges with coloured dots and hover/focus descriptions.
+- Use Create under Actions and Add under Profiles. Mark form fields as required
+  or optional, including optional device descriptions.
+- Offer opt-in secrets and certificates with the baseline set. Omit empty
+  baseline secret fields and preserve stored credentials; keep secrets masked.
+- Search retained audit/device events before applying the result limit.
+
 ## 2.8.17
 
 - Put the blank-description discovery hint inside the enrollment Description

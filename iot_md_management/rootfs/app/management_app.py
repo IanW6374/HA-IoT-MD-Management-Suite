@@ -11,7 +11,7 @@ import time
 import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 APP_DIRECTORY = Path(__file__).resolve().parent
 if str(APP_DIRECTORY) not in sys.path:
@@ -138,7 +138,7 @@ CONTROLLER = FleetController(
 PORTAL_PAGES = {
     '/': 'overview', '/releases': 'releases', '/devices': 'devices',
     '/actions': 'actions', '/deploy': 'actions', '/deployments': 'actions',
-    '/profiles': 'profiles', '/activity': 'activity', '/backups': 'actions',
+    '/profiles': 'profiles', '/activity': 'activity', '/logs': 'activity', '/backups': 'actions',
     '/settings': 'settings',
 }
 
@@ -338,6 +338,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path.rstrip('/') or '/'
+        search = parse_qs(urlparse(self.path).query).get('q', [''])[0][:256]
         try:
             if path == '/api/seed-workbench':
                 body = render_portal('actions').replace(b'<head>', b'<head><base href="../">')
@@ -370,9 +371,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/seed':
                 self._json(200, USB_SEED.snapshot())
             elif path == '/api/events':
-                self._json(200, {'events': STORE.list_events(500)})
+                self._json(200, {'events': STORE.list_events(500, search)})
             elif path == '/api/audit':
-                self._json(200, {'audit': STORE.list_audit(500)})
+                self._json(200, {'audit': STORE.list_audit(500, search)})
             elif path == '/api/deployments':
                 self._json(200, {'deployments': STORE.list_deployments(200)})
             elif path == '/api/rollouts':

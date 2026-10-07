@@ -7,20 +7,24 @@ def compose(html):
     assets = Path(__file__).with_name('assets')
     # Replace renderers rather than emitting conflicting function definitions.
     prefixes = ('function deviceConnectionBadges(', 'function renderReleases(',
-                'function renderProfiles(', 'async function setReleaseChannel(')
+                'function renderProfiles(', 'async function setReleaseChannel(',
+                'function renderActivity(', 'function renderActionHistory(',
+                'function setActionHistoryFilter(', 'function timeline(')
     html = '\n'.join(line for line in html.split('\n') if not line.startswith(prefixes))
     html = html.replace('const activePage=',
-                        assets.joinpath('fleet_views.js').read_text() + '\nconst activePage=', 1)
+                        assets.joinpath('fleet_views.js').read_text() + '\n' +
+                        assets.joinpath('logs_views.js').read_text() + '\n' +
+                        assets.joinpath('form_requirements.js').read_text() + '\nconst activePage=', 1)
     html = html.replace('</style>', assets.joinpath('fleet_views.css').read_text() + '</style>', 1)
     start = html.index('<nav aria-label="Primary">')
     end = html.index('</nav>', start) + len('</nav>')
     html = html[:start] + '''<button id="nav-toggle" class="nav-toggle secondary" type="button" aria-controls="primary-nav" aria-expanded="false">Menu</button><nav aria-label="Primary" id="primary-nav" class="nav-actions">
 <a class="nav-link" data-page-link="overview" href="./">Overview</a>
-<div class="nav-group"><button class="nav-link nav-menu-trigger" type="button" data-page-link="actions" aria-haspopup="true" aria-expanded="false" aria-controls="actions-menu">Actions</button><div id="actions-menu" class="nav-dropdown"><a class="nav-link" data-action-nav="new" href="actions?view=new">New</a><a class="nav-link" data-action-nav="inflight" href="actions?view=inflight">In-Flight <span id="inflight-count" class="badge">0</span></a></div></div>
+<div class="nav-group"><button class="nav-link nav-menu-trigger" type="button" data-page-link="actions" aria-haspopup="true" aria-expanded="false" aria-controls="actions-menu">Actions</button><div id="actions-menu" class="nav-dropdown"><a class="nav-link" data-action-nav="new" href="actions?view=new">Create</a><a class="nav-link" data-action-nav="inflight" href="actions?view=inflight">In-Flight <span id="inflight-count" class="badge">0</span></a></div></div>
 <div class="nav-group"><button class="nav-link nav-menu-trigger" type="button" data-page-link="devices" aria-haspopup="true" aria-expanded="false" aria-controls="devices-menu">Devices <span id="devices-menu-health" class="device-health-led unknown" role="img" aria-label="Fleet health: waiting for reports" title="Fleet health: waiting for reports"></span></button><div id="devices-menu" class="nav-dropdown"><a class="nav-link" data-fleet-nav="enrol" href="devices?view=enrol">Enrol</a><a class="nav-link" data-fleet-nav="list" href="devices?view=list">List</a></div></div>
 <a class="nav-link" data-page-link="releases" href="releases">Releases</a>
-<div class="nav-group"><button class="nav-link nav-menu-trigger" type="button" data-page-link="profiles" aria-haspopup="true" aria-expanded="false" aria-controls="profiles-menu">Profiles</button><div id="profiles-menu" class="nav-dropdown"><a class="nav-link" data-fleet-nav="new" href="profiles?view=new">New</a><a class="nav-link" data-fleet-nav="list" href="profiles?view=list">List</a></div></div>
-<a class="nav-link" data-page-link="activity" href="activity">Activity</a><a class="nav-link" data-page-link="settings" href="settings">Settings</a></nav>''' + html[end:]
+<div class="nav-group"><button class="nav-link nav-menu-trigger" type="button" data-page-link="profiles" aria-haspopup="true" aria-expanded="false" aria-controls="profiles-menu">Profiles</button><div id="profiles-menu" class="nav-dropdown"><a class="nav-link" data-fleet-nav="new" href="profiles?view=new">Add</a><a class="nav-link" data-fleet-nav="list" href="profiles?view=list">List</a></div></div>
+<div class="nav-group"><button class="nav-link nav-menu-trigger" type="button" data-page-link="activity" aria-label="Logs" aria-haspopup="true" aria-expanded="false" aria-controls="logs-menu">Logs</button><div id="logs-menu" class="nav-dropdown"><a class="nav-link" data-log-nav="activity" href="logs?view=activity">Activity</a><a class="nav-link" data-log-nav="audit" href="logs?view=audit">Audit</a></div></div><a class="nav-link" data-page-link="settings" href="settings">Settings</a></nav>''' + html[end:]
     for page, label in (('actions', 'Actions'), ('devices', 'Devices'), ('profiles', 'Profiles')):
         html = html.replace('data-page-link="' + page + '" aria-haspopup="true"', 'data-page-link="' + page + '" aria-label="' + label + '" aria-haspopup="true"')
     html = html.replace('aria-controls="devices-menu"', 'aria-controls="devices-menu" aria-describedby="devices-menu-health"', 1)
@@ -50,4 +54,30 @@ def compose(html):
     promotion = '<dt>Automatic Stable promotion</dt><dd>__AUTO_PROMOTE_STABLE__</dd><dt>Automatic Beta promotion</dt><dd>__AUTO_PROMOTE_BETA__</dd><dt>Automatic Alpha promotion</dt><dd>__AUTO_PROMOTE_ALPHA__</dd>'
     html = html.replace(promotion, '')
     html = html.replace('<section class="panel"><h2>Management trust</h2>', '''<section class="panel"><h2>Auto-promotion</h2><p class="muted">Managed in Home Assistant app configuration. Promote the newest newly imported release of each selected type after verification.</p><fieldset class="promotion-options"><legend class="visually-hidden">Saved auto-promotion choices</legend><label class="check"><input type="checkbox" __AUTO_PROMOTE_ALPHA_CHECKED__ disabled><span>Alpha</span></label><label class="check"><input type="checkbox" __AUTO_PROMOTE_BETA_CHECKED__ disabled><span>Beta</span></label><label class="check"><input type="checkbox" __AUTO_PROMOTE_STABLE_CHECKED__ disabled><span>Stable</span></label></fieldset></section><section class="panel"><h2>Management trust</h2>''', 1)
+    html = html.replace('>New profile</a>', '>Add profile</a>')
+    html = html.replace('<h1 id="actions-title">New action</h1>', '<h1 id="actions-title">Create action</h1>')
+    html = html.replace("names.map(name=>api('api/'+name))", "names.map(name=>api(auditEndpoint(name)))")
+    html = html.replace('async function refreshAll(){const names=', "async function refreshAll(){const requestedAuditQuery=document.getElementById('audit-search')?.value||'';const names=")
+    for source in ('audit', 'events'):
+        html = html.replace('if(values.' + source + ')state.' + source,
+                            "if(values." + source + "&&requestedAuditQuery===(document.getElementById('audit-search')?.value||''))state." + source)
+    html = html.replace("kind=entry.dataset.profileKind;if(kind==='boolean')", "kind=entry.dataset.profileKind;if(omitEmptyBaselineSecret(entry,control))continue;if(kind==='boolean')")
+    html = html.replace("?'In-Flight actions':'New action'", "?'In-Flight actions':'Create action'")
+    html = html.replace(".textContent='New profile'", ".textContent='Add profile'")
+    # Keep /activity as a backwards-compatible route; new links use the Logs menu.
+    html = html.replace('href="activity', 'href="logs').replace('`activity?', '`logs?').replace("'activity');renderActionHistory()", "'logs');renderActionHistory()")
+    html = html.replace('added to Activity.', 'added to the Activity log.').replace('retained in Activity.', 'retained in Logs / Activity.')
+    html = html.replace('<h1>Activity</h1>', '<h1 id="logs-title">Activity log</h1>')
+    html = html.replace('<section class="panel"><div class="section-head"><div><h2>Attention required</h2>', '<section class="panel" data-log-view="activity"><div class="section-head"><div><h2>Attention required</h2>')
+    html = html.replace('<section class="panel"><div class="section-head"><div><h2>Action history</h2>', '<section class="panel" data-log-view="activity"><div class="section-head"><div><h2>Action history</h2>')
+    html = html.replace('<section class="panel"><div class="section-head"><div><h2>Audit timeline</h2>', '<section class="panel" data-log-view="audit"><div class="section-head"><div><h2>Audit log</h2>')
+    html = html.replace('<div class="activity-tools"><label>Show<select id="action-history-filter">', '<div class="activity-tools"><label>Search activity<input id="action-history-search" type="search" placeholder="Device, version, action or outcome" oninput="renderActionHistory()"></label><label>Show<select id="action-history-filter">')
+    html = html.replace('<div class="activity-tools"><label>Filter<select id="activity-filter">', '<div class="activity-tools"><label>Search audit<input id="audit-search" type="search" maxlength="256" placeholder="Device, action, event or detail" oninput="searchAudit()"></label><label>Filter<select id="activity-filter">')
+    html = html.replace('Newest activity first.', 'Search retained administrative and device events. The latest 500 matches from each source are shown.')
+    # Completed action dots convey the outcome without repeating a status badge.
+    html = html.replace('<span class="event-dot"></span><div><div class="title-row"><strong>${esc(content', '${logStatusDot(deployment.status)}<div><div class="title-row"><strong>${esc(content')
+    html = html.replace("${esc(content||'Configuration deployment')}</strong>${statusBadge(deployment.status)}", "${esc(content||'Configuration deployment')}</strong>")
+    html = html.replace('<span class="event-dot"></span><div><div class="title-row"><strong>${recovery?', '${logStatusDot(job.status===\'complete\'?(recovery?\'Recovery prepared\':\'Image verified\'):job.status)}<div><div class="title-row"><strong>${recovery?')
+    html = html.replace("</strong>${statusBadge(job.status==='complete'?(recovery?'Recovery prepared':'Image verified'):job.status)}", '</strong>')
+    html = html.replace('<span class="event-dot"></span><div><div class="backup-title">', '${logStatusDot(\'complete\',\'Encrypted backup stored\')}<div><div class="backup-title">')
     return html
