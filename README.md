@@ -50,17 +50,18 @@ Existing group assignments and device history are preserved.
 ## Profiles and complete backups
 
 Profiles are reusable configuration patches or baselines. The profile builder
-starts empty, lets an administrator search for and add only the settings the
-profile owns, and keeps advanced certificates and trust material out of the
-normal editing path. A deployment can still select an individual profile item,
+defaults to the baseline selection and uses one searchable grouped dropdown.
+Each group has all/some/none checkbox states, and individual settings can be
+selected or deselected. Selected groups appear as removable chips; only their
+selected settings are shown in the editor. A deployment can still select an individual profile item,
 such as enabling syslog, without pushing the remainder of the profile.
 
-Use **Profiles > Create** to create a profile. Add individual settings or a whole
-section (for example MQTT). **Use baseline set** adds every supported setting,
-including Wi-Fi SSID and MQTT username, except the device name to avoid giving
-an entire fleet the same identity. Device name can still be added explicitly.
-Select **Include secrets and certificates** to add all password, certificate,
-private-key and trust fields as well. Empty baseline text and credentials
+Use **Profiles > Create** to create a profile. The default baseline includes
+Wi-Fi SSID and MQTT username, but excludes device name and secrets/certificates.
+Expand a group to choose individual fields, or select the whole group.
+**Select all settings** includes everything, including device name and credentials;
+**Reset to baseline** restores the default selection without overwriting drafts.
+Empty bulk-selected text and credentials
 are omitted rather than clearing existing device values. Previously
 saved profile secrets are retained, encrypted at rest and masked in the list.
 Required fields have a compact icon with an accessible hover description;

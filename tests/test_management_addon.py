@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.8.19', addon)
+        self.assertIn('version: 2.8.20', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -493,7 +493,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertIn('id="audit-search"', html)
         self.assertIn('data-action-nav="new" href="actions?view=new">Create</a>', html)
         self.assertIn('data-fleet-nav="new" href="profiles?view=new">Create</a>', html)
-        self.assertIn('id="profile-baseline-secrets" type="checkbox"', html)
+        self.assertIn('id="profile-select-all" type="checkbox"', html)
         self.assertIn('omitEmptyBaselineSecret(entry,control)', html)
         self.assertIn('className = "field-requirement"', html)
 
@@ -535,12 +535,14 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
 
     def test_profile_picker_and_backup_device_loading_are_concise(self):
         self.assertNotIn('Profile type<select', self.module.HTML)
-        self.assertIn('Use baseline set', self.module.HTML)
+        self.assertIn('Reset to baseline', self.module.HTML)
         self.assertIn("remove.className='badge profile-remove'", self.module.HTML)
         self.assertIn("advanced?.classList.toggle('hidden',!showAdvanced)", self.module.HTML)
-        self.assertIn('id="profile-setting-select"', self.module.HTML)
-        self.assertIn('Advanced — ${section}', self.module.HTML)
-        self.assertIn("selector.addEventListener('change'", self.module.HTML)
+        self.assertIn('id="profile-settings-picker"', self.module.HTML)
+        self.assertIn('data-selection-group', self.module.HTML)
+        self.assertIn('data-selection-setting', self.module.HTML)
+        self.assertNotIn('id="profile-section-select"', self.module.HTML)
+        self.assertNotIn('id="profile-baseline-secrets"', self.module.HTML)
         self.assertIn(
             '#profile-editor>.profile-sections>.profile-group:first-child,.profile-picker{grid-column:1/-1}',
             self.module.HTML,
@@ -819,7 +821,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertIn('name="port" type="number" min="1" max="65535" value="8444" required', form)
         self.assertIn('name="cohort" data-group-select required', form)
         self.assertIn('data-fleet-nav="groups" href="devices?view=groups">Groups</a>', html)
-        self.assertIn('id="profile-section-select"', html)
+        self.assertIn('id="profile-settings-search"', html)
 
     def test_enrollment_derives_identity_from_hostname_and_prevents_duplicates(self):
         store = self.module.STORE

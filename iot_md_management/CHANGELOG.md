@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.8.20
+
+- Replace separate profile selection controls with one searchable grouped
+  dropdown. Default to the baseline; support select-all, all/some/none group
+  states, individual checkboxes and removable group chips.
+- Keep selection, expanded groups and the dropdown stable during refreshes;
+  preserve field drafts on deselection and baseline reset.
+- Bulk selection leaves blank values unchanged, while explicitly selected
+  secret/file fields still require values before saving.
+
 ## 2.8.19
 
 - Use small required-only icons, including mandatory USB acknowledgements.

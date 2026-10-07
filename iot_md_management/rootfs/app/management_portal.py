@@ -1,5 +1,6 @@
 """Graphical, ingress-safe Management Suite portal."""
 
+from pathlib import Path
 
 HTML = r'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
@@ -245,85 +246,7 @@ HTML = HTML.replace(
     "trackedDeploymentId=result.id;status.className='status';status.textContent='';await refreshAll()}catch(error)",
     "trackedDeploymentId=result.id;status.className='status';status.textContent='';await refreshAll();setActionView('inflight',true)}catch(error)",
 )
-_BACKUP_SCRIPT = r'''
-function enhanceProfileDesigner(){
-  const form=document.getElementById('profile-editor');
-  if(!form||form.dataset.designer==='true')return;
-  form.dataset.designer='true';
-  const first=form.querySelector('.profile-group'),advanced=form.querySelector('details'),toolbar=document.createElement('section');
-  toolbar.className='profile-picker';
-  toolbar.innerHTML=`<label>Add a setting<select id="profile-setting-select"><option value="">Choose a setting</option></select></label><div class="actions"><span id="profile-selected-count" class="badge">0 selected</span><button class="secondary" type="button" id="profile-add-setting">Add setting</button><label class="check"><input id="profile-baseline-secrets" type="checkbox"><span>Include secrets and certificates</span></label><button class="secondary" type="button" id="profile-baseline">Use baseline set</button></div><p class="muted">Blank baseline passwords and certificate files are not saved or pushed; existing device credentials are retained. Supplied secrets are encrypted and masked after saving.</p>`;
-  first.after(toolbar);
-  toolbar.querySelector('p').textContent='Add individual settings, a whole section, or the full baseline. The baseline includes Wi-Fi SSID, MQTT username and all supported settings except device name. Blank baseline text, passwords and certificate files are not pushed; existing values are retained.';
-  const sectionPicker=document.createElement('label');
-  sectionPicker.innerHTML='<span>Choose a section</span><select id="profile-section-select"><option value="">Choose a section</option></select>';
-  toolbar.querySelector('label').after(sectionPicker);
-  const sectionButton=document.createElement('button');sectionButton.type='button';sectionButton.className='secondary';sectionButton.textContent='Add section';sectionButton.disabled=true;
-  toolbar.querySelector('.actions').prepend(sectionButton);
-  const entries=[...form.querySelectorAll('.profile-entry')],selector=toolbar.querySelector('#profile-setting-select'),groups=new Map();
-  for(const entry of entries){
-    const control=entry.querySelector('[name]'),include=entry.querySelector('[data-profile-include]'),label=entry.dataset.label,fieldLabel=control.closest('label'),heading=document.createElement('div'),remove=document.createElement('button'),fieldset=entry.closest('.profile-group'),section=fieldset?.querySelector('legend')?.textContent||'Settings';
-    entry.dataset.settingName=control.name;
-    entry.classList.add('hidden');
-    include.closest('label').classList.add('hidden');
-    heading.className='profile-entry-heading';
-    heading.innerHTML=`<strong>${esc(label)}</strong>`;
-    remove.type='button';
-    remove.className='badge profile-remove';
-    remove.textContent='Remove';
-    remove.setAttribute('aria-label',`Remove ${label}`);
-    remove.onclick=()=>{include.checked=false;entry.classList.add('hidden');updateProfileDesigner()};
-    heading.append(remove);
-    for(const node of [...fieldLabel.childNodes])if(node.nodeType===3)node.remove();
-    entry.prepend(heading);
-    if(!groups.has(section)){
-      const group=document.createElement('optgroup');
-      group.label=advanced?.contains(entry)?`Advanced — ${section}`:section;
-      groups.set(section,group);
-      selector.append(group);
-    }
-    const option=document.createElement('option');
-    option.value=control.name;
-    option.textContent=label;
-    groups.get(section).append(option);
-  }
-  const sectionSelect=sectionPicker.querySelector('select');
-  for(const [section,group] of groups){const option=document.createElement('option');option.value=section;option.textContent=group.label;sectionSelect.append(option)}
-  sectionSelect.onchange=()=>{sectionButton.disabled=!sectionSelect.value};
-  sectionButton.onclick=()=>{const fields=[...groups.get(sectionSelect.value).children].map(option=>option.value);for(const name of fields){const entry=entries.find(item=>item.dataset.settingName===name),secret=['secret','file'].includes(entry.dataset.profileKind);if(!secret||toolbar.querySelector('#profile-baseline-secrets').checked)add(name,true)}};
-  function add(name,optionalSecret=false){
-    const entry=entries.find(item=>item.dataset.settingName===name);
-    if(!entry)return;
-    // A repeat baseline click must not weaken an explicitly selected secret.
-    if(!entry.querySelector('[data-profile-include]').checked)entry.dataset.baselineOptional=String(optionalSecret);
-    entry.querySelector('[data-profile-include]').checked=true;
-    entry.classList.remove('hidden');
-    updateProfileDesigner();
-    if(advanced?.contains(entry))advanced.setAttribute('open','');
-    entry.querySelector('[name]')?.focus();
-  }
-  function updateProfileDesigner(){
-    const selected=entries.filter(item=>item.querySelector('[data-profile-include]').checked),count=selected.length;
-    const optionalText=new Set(['device_description','wifi_ip_address','wifi_subnet_mask','wifi_gateway','wifi_dns_server','mqtt_server','mqtt_username','syslog_host','acme_directory_url','certificate_hostname','portal_certificate_hostname']);
-    for(const entry of entries){const control=entry.querySelector('[name]'),included=selected.includes(entry);control.disabled=!included;control.required=included&&control.type!=='checkbox'&&!optionalText.has(control.name)&&entry.dataset.baselineOptional!=='true'}
-    document.getElementById('profile-selected-count').textContent=`${count} selected`;
-    for(const group of form.querySelectorAll('.profile-group')){
-      if(group===first)continue;
-      group.classList.toggle('hidden',![...group.querySelectorAll('.profile-entry')].some(item=>!item.classList.contains('hidden')));
-    }
-    const showAdvanced=advanced&&selected.some(item=>advanced.contains(item));
-    advanced?.classList.toggle('hidden',!showAdvanced);
-    if(advanced&&!showAdvanced)advanced.removeAttribute('open');
-    for(const option of selector.options){
-      if(option.value)option.disabled=selected.some(item=>item.dataset.settingName===option.value);
-    }
-  }
-  window.updateProfileDesigner=updateProfileDesigner;
-  toolbar.querySelector('#profile-add-setting').onclick=()=>{if(selector.value){add(selector.value);selector.value=''}};
-  selector.addEventListener('change',()=>{if(selector.value){add(selector.value);selector.value=''}});
-  toolbar.querySelector('#profile-baseline').onclick=()=>{baselineProfileFields(entries,toolbar.querySelector('#profile-baseline-secrets').checked).forEach(name=>add(name,true))};
-  updateProfileDesigner();
-}
+_BACKUP_SCRIPT = Path(__file__).with_name('assets').joinpath('profile_designer.js').read_text() + r'''
 const backupState={items:[],settings:{},pending:null,renderSignature:''};
 function renderBackupProgress(jobs=[]){const box=document.getElementById('backup-progress'),section=document.getElementById('backup-operations'),list=document.getElementById('backup-active-list');if(!box||!section||!list)return;if(!jobs.length){section.classList.add('hidden');box.innerHTML='';list.innerHTML='';return}const total=jobs.length,started=jobs.filter(job=>['running','complete'].includes(job.status)).length,complete=jobs.filter(job=>job.status==='complete').length,failed=jobs.some(job=>job.status==='failed');section.classList.remove('hidden');box.innerHTML=milestoneFlow(['Queued','Backing up','Stored'],[total,started,complete],total,failed);list.innerHTML=jobs.map(job=>{const device=state.devices.find(item=>item.id===job.target);return `<div class="operation-row"><span><strong>${esc(device?.name||job.target)}</strong><small>${esc(job.payload?.source||'manual')} encrypted backup</small></span>${statusBadge(job.status)}</div>`}).join('')}
 function backupDeviceOptions(selected=''){return state.devices.filter(item=>item.enabled).map(item=>`<option value="${esc(item.id)}" ${item.id===selected?'selected':''}>${esc(item.name)} · ${esc(item.id)}</option>`).join('')}
