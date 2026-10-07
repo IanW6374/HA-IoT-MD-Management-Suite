@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.8.17
+
+- Put the blank-description discovery hint inside the enrollment Description
+  field rather than in the enrollment guidance.
+- Centre API and device-health LEDs beneath their desktop table headings.
+
 ## 2.8.16
 
 - Move the shared connection/data refresh icon after the hostname, separate

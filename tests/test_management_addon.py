@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.8.16', addon)
+        self.assertIn('version: 2.8.17', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -193,6 +193,9 @@ for (const status of ['complete','running']) {
         self.assertNotIn('Management ID', self.module.HTML)
         self.assertNotIn('<input name="id"', self.module.HTML)
         self.assertIn('immutable device identity', self.module.HTML)
+        self.assertIn('placeholder="Blank = device description"', self.module.HTML)
+        self.assertNotIn('Leave Description blank to discover', self.module.HTML)
+        self.assertIn('td[data-label="API"],.device-table td[data-label="Device health"]{text-align:center}', self.module.HTML)
         self.assertIn('Refresh connection and device health', self.module.HTML)
         self.assertIn("button.setAttribute('aria-busy','true')", self.module.HTML)
         self.assertIn('<svg viewBox="0 0 24 24" aria-hidden="true"', self.module.HTML)
