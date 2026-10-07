@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.8.19
+
+- Use small required-only icons, including mandatory USB acknowledgements.
+- Add Devices / Groups to list existing assignments and create saved groups.
+- Enrol by hostname without a Name field; require defaulted Port and Group,
+  and use a saved-group selector instead of freeform text.
+- Rename Profiles / Add to Create. Add section-based profile selection and
+  include every supported baseline setting except device name, with opt-in
+  secrets/certificates. Skip blank baseline text and credentials to preserve
+  existing values.
+
 ## 2.8.18
 
 - Split Logs into searchable Activity and Audit pages; replace completed-action

@@ -41,6 +41,12 @@ from the device before Management confirms the change; failed writes or
 verification keep the unsaved edits visible.
 The Management name remains a local label, independent of the device description.
 
+Enrol devices by hostname under **Devices > Enrol**; no Name field is needed.
+Port defaults to 8444 and Group defaults to `default`, but both are required
+and can be changed. **Devices > Groups** lists device counts and creates saved
+groups, including empty groups, for the enrolment and device-settings selectors.
+Existing group assignments and device history are preserved.
+
 ## Profiles and complete backups
 
 Profiles are reusable configuration patches or baselines. The profile builder
@@ -49,12 +55,17 @@ profile owns, and keeps advanced certificates and trust material out of the
 normal editing path. A deployment can still select an individual profile item,
 such as enabling syslog, without pushing the remainder of the profile.
 
-Use **Profiles > Add** to create a profile. **Use baseline set** adds the standard
-operating settings; optionally select **Include secrets and certificates** to
-add all password, certificate, private-key and trust fields as well. Empty
-baseline secret fields are omitted, not sent as blank credentials. Previously
+Use **Profiles > Create** to create a profile. Add individual settings or a whole
+section (for example MQTT). **Use baseline set** adds every supported setting,
+including Wi-Fi SSID and MQTT username, except the device name to avoid giving
+an entire fleet the same identity. Device name can still be added explicitly.
+Select **Include secrets and certificates** to add all password, certificate,
+private-key and trust fields as well. Empty baseline text and credentials
+are omitted rather than clearing existing device values. Previously
 saved profile secrets are retained, encrypted at rest and masked in the list.
-Required and optional fields are labelled consistently across the portals.
+Required fields have a compact icon with an accessible hover description;
+optional fields remain unmarked. Mandatory checkbox acknowledgements are
+included, and conditional requirements follow the currently enabled feature.
 
 **Logs > Activity** holds searchable completed actions and recovery points,
 including per-device results and restore controls. **Logs > Audit** searches

@@ -11,6 +11,7 @@ def compose(html):
                 'function renderActivity(', 'function renderActionHistory(',
                 'function setActionHistoryFilter(', 'function timeline(')
     html = '\n'.join(line for line in html.split('\n') if not line.startswith(prefixes))
+    html = html.replace('const activePage=', assets.joinpath('groups_views.js').read_text() + '\nconst activePage=', 1)
     html = html.replace('const activePage=',
                         assets.joinpath('fleet_views.js').read_text() + '\n' +
                         assets.joinpath('logs_views.js').read_text() + '\n' +
@@ -80,4 +81,24 @@ def compose(html):
     html = html.replace('<span class="event-dot"></span><div><div class="title-row"><strong>${recovery?', '${logStatusDot(job.status===\'complete\'?(recovery?\'Recovery prepared\':\'Image verified\'):job.status)}<div><div class="title-row"><strong>${recovery?')
     html = html.replace("</strong>${statusBadge(job.status==='complete'?(recovery?'Recovery prepared':'Image verified'):job.status)}", '</strong>')
     html = html.replace('<span class="event-dot"></span><div><div class="backup-title">', '${logStatusDot(\'complete\',\'Encrypted backup stored\')}<div><div class="backup-title">')
+    html = html.replace('href="devices?view=list">List</a>', 'href="devices?view=list">List</a><a class="nav-link" data-fleet-nav="groups" href="devices?view=groups">Groups</a>')
+    html = html.replace('href="profiles?view=new">Add</a>', 'href="profiles?view=new">Create</a>').replace('>Add profile</a>', '>Create profile</a>').replace(".textContent='Add profile'", ".textContent='Create profile'")
+    html = html.replace('<label>Name<input name="name" placeholder="IoT-MD-001"></label>', '')
+    start = html.index('<form id="register">')
+    end = html.index('</form>', start) + len('</form>')
+    html = html[:start] + '''<form id="register"><div class="grid"><label>Hostname<input name="host" placeholder="IoT-MD-001.local" maxlength="253" required></label><label>Description<input name="description" placeholder="Blank = device description" maxlength="256"></label><label>Port<input name="port" type="number" min="1" max="65535" value="8444" required></label><label>Group<select name="cohort" data-group-select required><option value="default">default</option></select></label></div><p class="muted">Port and Group have defaults. Create another group under Devices / Groups before enrolling.</p><div class="actions"><span id="register-status" class="status" role="status"></span><button>Enrol device</button></div></form>''' + html[end:]
+    html = html.replace('<label>Cohort<input name="cohort" value="${esc(device.cohort)}" required></label>', '<label>Group<select name="cohort" data-group-select required>${groupOptions(device.cohort)}</select></label>')
+    # Keep API/storage keys stable; change only user-facing terminology.
+    html = html.replace('>Cohort<', '>Group<').replace('data-label="Cohort"', 'data-label="Group"').replace('All cohorts', 'All groups').replace('One or more cohorts', 'One or more groups').replace('saved cohort', 'saved group').replace('versions, cohort and', 'versions, group and').replace('Name, description, hostname or ID', 'Description, hostname or ID')
+    html = html.replace("'profiles','deployments','audit'", "'profiles','groups','deployments','audit'")
+    html = html.replace('renderMetrics();renderTargets();', 'if(values.groups)state.groups=values.groups.groups||[];renderGroups();renderMetrics();renderTargets();', 1)
+    html = html.replace('<div data-page-section="devices">', '''<div data-page-section="devices"><section class="panel" data-fleet-view="groups"><div class="section-head"><div><h2>Groups</h2><p>Use saved groups to enrol and target devices. Existing device groups are included automatically.</p></div></div><form id="group-create"><div class="grid"><label>Group name<input name="name" required maxlength="64" placeholder="e.g. Heating"></label></div><div class="actions"><span id="group-status" class="status" role="status"></span><button>Create group</button></div></form><div id="group-list" class="catalog-table-wrap"></div></section>''', 1)
+    # Keep the page heading above the new Groups workspace.
+    start = html.index('<section class="panel" data-fleet-view="groups">')
+    end = html.index('</section>', start) + len('</section>')
+    groups = html[start:end]
+    html = html[:start] + html[end:]
+    start = html.index('<div data-page-section="devices">')
+    end = html.index('</section>', start) + len('</section>')
+    html = html[:end] + groups + html[end:]
     return html

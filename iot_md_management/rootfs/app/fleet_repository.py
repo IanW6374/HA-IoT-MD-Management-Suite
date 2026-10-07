@@ -75,6 +75,12 @@ class FleetRepository:
                     last_seen INTEGER NOT NULL DEFAULT 0,
                     event_cursor INTEGER NOT NULL DEFAULT 0
                 );
+                CREATE TABLE IF NOT EXISTS device_groups (
+                    name TEXT PRIMARY KEY,
+                    created_at INTEGER NOT NULL
+                );
+                INSERT OR IGNORE INTO device_groups(name,created_at) VALUES('default',0);
+                INSERT OR IGNORE INTO device_groups(name,created_at) SELECT DISTINCT cohort,0 FROM devices;
                 CREATE TABLE IF NOT EXISTS events (
                     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                     device_id TEXT NOT NULL,
@@ -382,6 +388,32 @@ class FleetRepository:
             description.strip(),
         )
 
+    def list_groups(self):
+        """Keep empty saved groups and discover groups from existing devices."""
+        with self.lock:
+            rows = self.connection.execute('''
+                SELECT name, (SELECT COUNT(*) FROM devices WHERE cohort=known_groups.name) AS device_count
+                FROM (SELECT name FROM device_groups UNION SELECT cohort AS name FROM devices) AS known_groups
+                ORDER BY lower(name), name
+            ''').fetchall()
+            return [dict(row) for row in rows]
+
+    def create_group(self, name):
+        if not isinstance(name, str) or not name.strip() or len(name.strip()) > 64:
+            raise ValueError('group name must contain 1 to 64 characters')
+        name = name.strip()
+        if any(ord(char) < 32 for char in name):
+            raise ValueError('group name cannot contain control characters')
+        with self.lock, self.connection:
+            existing = self.connection.execute('''
+                SELECT name FROM device_groups WHERE lower(name)=lower(?)
+                UNION SELECT cohort FROM devices WHERE lower(cohort)=lower(?)
+            ''', (name, name)).fetchone()
+            if existing:
+                raise ValueError('group already exists')
+            self.connection.execute('INSERT INTO device_groups(name,created_at) VALUES(?,?)', (name, self.now()))
+        return {'name': name, 'device_count': 0}
+
     def enroll(self, record):
         """Derive new local identities without re-keying existing fleet history."""
         record = dict(record)
@@ -407,6 +439,7 @@ class FleetRepository:
         values = self._device_values(record)
         identifier = values[0]
         with self.lock, self.connection:
+            self.connection.execute('INSERT OR IGNORE INTO device_groups(name,created_at) VALUES(?,?)', (values[7], self.now()))
             self.connection.execute('''
                 INSERT INTO devices(
                     id,name,host,port,ca_path,cert_path,key_path,cohort,enabled,description

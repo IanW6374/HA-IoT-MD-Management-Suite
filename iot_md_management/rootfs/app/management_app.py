@@ -368,6 +368,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
             elif path == '/api/devices':
                 self._json(200, {'devices': STORE.list_devices()})
+            elif path == '/api/groups':
+                self._json(200, {'groups': STORE.list_groups()})
             elif path == '/api/seed':
                 self._json(200, USB_SEED.snapshot())
             elif path == '/api/events':
@@ -446,6 +448,10 @@ class Handler(BaseHTTPRequestHandler):
                     target=CONTROLLER.complete_enrollment,
                     args=(result['id'], str(request.get('description') or '').strip()), daemon=True
                 ).start()
+                self._json(201, result)
+            elif path == '/api/groups':
+                result = STORE.create_group(request.get('name'))
+                STORE.record_audit('group.created', 'complete', result['name'], 'Group created')
                 self._json(201, result)
             elif path == '/api/policy':
                 self._json(202, CONTROLLER.apply_policy(request))

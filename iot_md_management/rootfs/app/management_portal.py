@@ -254,6 +254,12 @@ function enhanceProfileDesigner(){
   toolbar.className='profile-picker';
   toolbar.innerHTML=`<label>Add a setting<select id="profile-setting-select"><option value="">Choose a setting</option></select></label><div class="actions"><span id="profile-selected-count" class="badge">0 selected</span><button class="secondary" type="button" id="profile-add-setting">Add setting</button><label class="check"><input id="profile-baseline-secrets" type="checkbox"><span>Include secrets and certificates</span></label><button class="secondary" type="button" id="profile-baseline">Use baseline set</button></div><p class="muted">Blank baseline passwords and certificate files are not saved or pushed; existing device credentials are retained. Supplied secrets are encrypted and masked after saving.</p>`;
   first.after(toolbar);
+  toolbar.querySelector('p').textContent='Add individual settings, a whole section, or the full baseline. The baseline includes Wi-Fi SSID, MQTT username and all supported settings except device name. Blank baseline text, passwords and certificate files are not pushed; existing values are retained.';
+  const sectionPicker=document.createElement('label');
+  sectionPicker.innerHTML='<span>Choose a section</span><select id="profile-section-select"><option value="">Choose a section</option></select>';
+  toolbar.querySelector('label').after(sectionPicker);
+  const sectionButton=document.createElement('button');sectionButton.type='button';sectionButton.className='secondary';sectionButton.textContent='Add section';sectionButton.disabled=true;
+  toolbar.querySelector('.actions').prepend(sectionButton);
   const entries=[...form.querySelectorAll('.profile-entry')],selector=toolbar.querySelector('#profile-setting-select'),groups=new Map();
   for(const entry of entries){
     const control=entry.querySelector('[name]'),include=entry.querySelector('[data-profile-include]'),label=entry.dataset.label,fieldLabel=control.closest('label'),heading=document.createElement('div'),remove=document.createElement('button'),fieldset=entry.closest('.profile-group'),section=fieldset?.querySelector('legend')?.textContent||'Settings';
@@ -281,6 +287,10 @@ function enhanceProfileDesigner(){
     option.textContent=label;
     groups.get(section).append(option);
   }
+  const sectionSelect=sectionPicker.querySelector('select');
+  for(const [section,group] of groups){const option=document.createElement('option');option.value=section;option.textContent=group.label;sectionSelect.append(option)}
+  sectionSelect.onchange=()=>{sectionButton.disabled=!sectionSelect.value};
+  sectionButton.onclick=()=>{const fields=[...groups.get(sectionSelect.value).children].map(option=>option.value);for(const name of fields){const entry=entries.find(item=>item.dataset.settingName===name),secret=['secret','file'].includes(entry.dataset.profileKind);if(!secret||toolbar.querySelector('#profile-baseline-secrets').checked)add(name,true)}};
   function add(name,optionalSecret=false){
     const entry=entries.find(item=>item.dataset.settingName===name);
     if(!entry)return;
@@ -311,7 +321,7 @@ function enhanceProfileDesigner(){
   window.updateProfileDesigner=updateProfileDesigner;
   toolbar.querySelector('#profile-add-setting').onclick=()=>{if(selector.value){add(selector.value);selector.value=''}};
   selector.addEventListener('change',()=>{if(selector.value){add(selector.value);selector.value=''}});
-  toolbar.querySelector('#profile-baseline').onclick=()=>{baselineProfileFields(entries,toolbar.querySelector('#profile-baseline-secrets').checked).forEach(name=>add(name,entries.some(entry=>entry.dataset.settingName===name&&['secret','file'].includes(entry.dataset.profileKind))))};
+  toolbar.querySelector('#profile-baseline').onclick=()=>{baselineProfileFields(entries,toolbar.querySelector('#profile-baseline-secrets').checked).forEach(name=>add(name,true))};
   updateProfileDesigner();
 }
 const backupState={items:[],settings:{},pending:null,renderSignature:''};

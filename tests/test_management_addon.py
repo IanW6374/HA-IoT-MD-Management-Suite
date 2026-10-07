@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.8.18', addon)
+        self.assertIn('version: 2.8.19', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -180,12 +180,11 @@ for (const status of ['complete','running']) {
                       self.module.HTML)
 
     def test_device_enrollment_has_guidance_and_management_actions(self):
-        self.assertIn('placeholder="IoT-MD-001"', self.module.HTML)
         self.assertIn('placeholder="IoT-MD-001.local"', self.module.HTML)
         self.assertIn('<label>Hostname<input name="host"', self.module.HTML)
         self.assertNotIn('without https://', self.module.HTML)
         self.assertIn('name="description" maxlength="256"', self.module.HTML)
-        self.assertNotIn('placeholder="e.g.', self.module.HTML)
+        self.assertNotIn('placeholder="e.g.', self.module.HTML.split('<form id="register">')[1].split('</form>')[0])
         self.assertNotIn('name="ca_path"', self.module.HTML)
         self.assertNotIn('name="cert_path"', self.module.HTML)
         self.assertNotIn('name="key_path"', self.module.HTML)
@@ -493,7 +492,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertIn('id="action-history-search"', html)
         self.assertIn('id="audit-search"', html)
         self.assertIn('data-action-nav="new" href="actions?view=new">Create</a>', html)
-        self.assertIn('data-fleet-nav="new" href="profiles?view=new">Add</a>', html)
+        self.assertIn('data-fleet-nav="new" href="profiles?view=new">Create</a>', html)
         self.assertIn('id="profile-baseline-secrets" type="checkbox"', html)
         self.assertIn('omitEmptyBaselineSecret(entry,control)', html)
         self.assertIn('className = "field-requirement"', html)
@@ -799,6 +798,28 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         ):
             self.module._release_sync()
         releases.promote.assert_called_once_with('v3.0.0-beta.1', 'beta')
+
+    def test_saved_groups_include_existing_assignments_and_empty_groups(self):
+        store = self.module.STORE
+        store.register({'id': 'group-test', 'host': 'group-test.local', 'cohort': 'Existing'})
+        store.create_group('Heating')
+        groups = {item['name']: item['device_count'] for item in store.list_groups()}
+        self.assertIn('default', groups)
+        self.assertEqual(groups['Heating'], 0)
+        self.assertEqual(groups['Existing'], 1)
+        for name in ('Heating', 'heating', 'Existing', '', 'x' * 65, 'bad\nname', None):
+            with self.assertRaises(ValueError):
+                store.create_group(name)
+
+    def test_enrollment_has_hostname_first_and_required_defaulted_group_and_port(self):
+        html = self.module.HTML
+        form = html.split('<form id="register">', 1)[1].split('</form>', 1)[0]
+        self.assertTrue(form.startswith('<div class="grid"><label>Hostname'))
+        self.assertNotIn('name="name"', form)
+        self.assertIn('name="port" type="number" min="1" max="65535" value="8444" required', form)
+        self.assertIn('name="cohort" data-group-select required', form)
+        self.assertIn('data-fleet-nav="groups" href="devices?view=groups">Groups</a>', html)
+        self.assertIn('id="profile-section-select"', html)
 
     def test_enrollment_derives_identity_from_hostname_and_prevents_duplicates(self):
         store = self.module.STORE

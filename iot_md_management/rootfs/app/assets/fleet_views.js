@@ -88,12 +88,11 @@ function renderProfiles(){
   document.getElementById('profile-list-count').textContent=`${items.length} of ${state.profiles.length} profiles`;
 }
 function baselineProfileFields(entries,includeSecrets=false){
-  const fields=['timezone_name','ntp_servers','loglevel','log_buffer_lines','ha_discovery','ha_discovery_prefix','mqtt_enabled','mqtt_port','mqtt_qos','syslog_enabled','syslog_port','syslog_transport','release_channel','release_check_schedule','release_check_time','release_auto_download','release_auto_activate','portal_transport','portal_port','portal_session_timeout_s','api_enabled','api_port','certificate_mode','certificate_method'];
-  if(includeSecrets)for(const entry of entries)if(['secret','file'].includes(entry.dataset.profileKind))fields.push(entry.dataset.settingName);
+  const fields=entries.filter(entry=>entry.dataset.settingName!=='device_name'&&(includeSecrets||!['secret','file'].includes(entry.dataset.profileKind))).map(entry=>entry.dataset.settingName);
   return [...new Set(fields)];
 }
-function omitEmptyBaselineSecret(entry,control){return entry.dataset.baselineOptional==='true'&&(['secret','file'].includes(entry.dataset.profileKind))&&(entry.dataset.profileKind==='file'?!control.files?.length:!control.value)}
-function fleetSubview(page){const requested=new URLSearchParams(location.search).get('view');return requested===(page==='devices'?'enrol':'new')?requested:'list'}
+function omitEmptyBaselineSecret(entry,control){return entry.dataset.baselineOptional==='true'&&(['secret','file','text','list'].includes(entry.dataset.profileKind))&&(entry.dataset.profileKind==='file'?!control.files?.length:!control.value.trim())}
+function fleetSubview(page){const requested=new URLSearchParams(location.search).get('view');return (page==='devices'?['enrol','groups']:['new']).includes(requested)?requested:'list'}
 function initFleetViews(){
   const page=document.body.dataset.page;
   if(['devices','profiles'].includes(page)){
@@ -103,6 +102,7 @@ function initFleetViews(){
       document.querySelector('[data-page-section="devices"] h1').textContent='Enrol device';
       document.querySelector('[data-page-section="devices"] .hero p:not(.eyebrow)').textContent='Connect a device by hostname using your configured mutual-TLS credentials.';
     }
+    if(page==='devices'&&view==='groups')document.querySelector('[data-page-section="devices"] h1').textContent='Device groups';
     if(page==='profiles'&&view==='new')document.querySelector('[data-page-section="profiles"] h1').textContent='New profile';
   }
 }
