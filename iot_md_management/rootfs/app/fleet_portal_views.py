@@ -15,8 +15,14 @@ def compose(html):
     html = html.replace('const activePage=',
                         assets.joinpath('fleet_views.js').read_text() + '\n' +
                         assets.joinpath('logs_views.js').read_text() + '\n' +
-                        assets.joinpath('form_requirements.js').read_text() + '\nconst activePage=', 1)
-    html = html.replace('</style>', assets.joinpath('fleet_views.css').read_text() + '</style>', 1)
+                        assets.joinpath('form_requirements.js').read_text() + '\n' +
+                        assets.joinpath('target_picker.js').read_text() + '\nconst activePage=', 1)
+    html = html.replace('</style>', assets.joinpath('fleet_views.css').read_text() +
+                        assets.joinpath('form_controls.css').read_text() + '</style>', 1)
+    html = html.replace("console.error('Profile editor initialization failed',error)",
+                        "showWorkspaceError('Profile editor could not be loaded',error)")
+    html = html.replace("refreshBackups();setInterval(()=>refreshBackups().catch(error=>console.error('Backup refresh failed',error)),5000)",
+                        "refreshBackups().catch(error=>showWorkspaceError('Backups could not be refreshed',error));setInterval(()=>refreshBackups().catch(error=>showWorkspaceError('Backups could not be refreshed',error)),5000)")
     start = html.index('<nav aria-label="Primary">')
     end = html.index('</nav>', start) + len('</nav>')
     html = html[:start] + '''<button id="nav-toggle" class="nav-toggle secondary" type="button" aria-controls="primary-nav" aria-expanded="false">Menu</button><nav aria-label="Primary" id="primary-nav" class="nav-actions">

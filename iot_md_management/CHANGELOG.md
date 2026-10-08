@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.8.21
+
+- Use the profile-style searchable grouped selector for deployment and backup
+  targets: select all, tri-state groups and individual devices. Preserve
+  selection, expanded groups and search drafts during refreshes.
+- Standardise checkbox-first controls, required markers, aligned form fields,
+  helper typography and accessible notification/error feedback.
+- Surface profile initialisation and backup refresh errors without hiding
+  existing data. Add offline browser regression coverage for target selection.
+
 ## 2.8.20
 
 - Replace separate profile selection controls with one searchable grouped

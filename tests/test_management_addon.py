@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.8.20', addon)
+        self.assertIn('version: 2.8.21', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -2084,7 +2084,8 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertIn("job.status==='failed'", self.module.HTML)
         self.assertIn('Retrying automatically; no new backup request is required.', self.module.HTML)
         self.assertIn('needs the configuration:write scope', self.module.HTML)
-        self.assertIn("if(activePage==='actions'){refreshBackups();setInterval", self.module.HTML)
+        self.assertIn("if(activePage==='actions'){refreshBackups().catch", self.module.HTML)
+        self.assertIn("showWorkspaceError('Backups could not be refreshed',error)", self.module.HTML)
         self.assertIn('backupState.pending.targets.every', self.module.HTML)
         self.assertIn("'active_jobs': STORE.active_jobs('backup')", Path(
             self.module.__file__
