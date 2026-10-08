@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.8.22', addon)
+        self.assertIn('version: 3.0.0', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -572,7 +572,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertIn('data-profile-include', self.module.HTML)
         self.assertIn('allowing a profile to change one entity', self.module.HTML)
         self.assertIn("file('certificate_portal','portal certificate'", self.module.HTML)
-        self.assertIn('/api/v2/configuration/profile', Path(
+        self.assertIn('/api/v3/configuration/profile', Path(
             self.module.__file__
         ).with_name('fleet_service.py').read_text())
 
@@ -1519,10 +1519,10 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertEqual(result['inventory']['configuration']['device_description'], 'New description')
         self.assertEqual(result['host'], 'new.local')
         self.assertEqual(controller._client.call_args.args[0]['host'], 'old.local')
-        self.assertEqual(client.request.call_args_list, [mock.call('/api/v2/configuration/profile', 'POST', {
+        self.assertEqual(client.request.call_args_list, [mock.call('/api/v3/configuration/profile', 'POST', {
             'format_version': 1, 'name': 'Device description',
             'settings': {'device_description': 'New description'},
-        }), mock.call('/api/v2/configuration')])
+        }), mock.call('/api/v3/configuration')])
         for key in ('last_seen', 'health', 'fleet', 'event_cursor', 'last_error'):
             self.assertEqual(result[key], before[key])
         client.reset_mock()
@@ -1697,14 +1697,14 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertEqual(result['preview']['changes'][0]['path'], 'Logging')
         self.assertEqual(
             client.request.call_args_list[0].args[0],
-            '/api/v2/configuration/backups/preview',
+            '/api/v3/configuration/backups/preview',
         )
         preview_request = client.request.call_args_list[0].args[2]
         self.assertNotIn('password', preview_request)
         self.assertEqual(len(bytes.fromhex(preview_request['derived_key'])), 32)
         self.assertEqual(
             client.request.call_args_list[1].args,
-            ('/api/v2/configuration/backups/apply', 'POST', {
+            ('/api/v3/configuration/backups/apply', 'POST', {
                 'token': 'preview-token'
             }),
         )
@@ -1760,10 +1760,10 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         calls = client.request.call_args_list
         self.assertEqual(
             calls[0].args[:3],
-            ('/api/v2/configuration/certificates/mqtt-ca', 'POST', b'ca-data'),
+            ('/api/v3/configuration/certificates/mqtt-ca', 'POST', b'ca-data'),
         )
         self.assertEqual(
-            calls[1].args[0], '/api/v2/configuration/certificates/apply'
+            calls[1].args[0], '/api/v3/configuration/certificates/apply'
         )
 
     def test_network_profile_restarts_before_management_confirmation(self):
@@ -1793,7 +1793,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
 
         self.assertEqual(
             client.request.call_args_list[1].args[0],
-            '/api/v2/configuration/restart',
+            '/api/v3/configuration/restart',
         )
 
     def test_deployment_can_apply_one_item_from_a_larger_profile(self):

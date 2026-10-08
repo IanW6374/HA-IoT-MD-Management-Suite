@@ -286,6 +286,11 @@ _store.set_blob('bootkey',_password)
 # Preserve the effective identity even if it was a filesystem override of NVS.
 _store.set_blob('verifykey',_verification)
 _store.commit()
+_ops=esp32.NVS('apiops')
+for _key in ('snapshot_a','snapshot_b'):
+ try:_ops.erase_key(_key)
+ except OSError:pass
+_ops.commit()
 _remove_tree('/')
 print('recovery-ready')`;
 

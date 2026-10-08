@@ -8,6 +8,7 @@ import os
 import secrets
 import ssl
 import time
+import threading
 import urllib.error
 import urllib.request
 
@@ -82,10 +83,21 @@ def device_connection_error(exc):
     return bounded_text(exc, 256)
 
 
+_DEVICE_REQUEST_LOCKS = {}
+_DEVICE_REQUEST_LOCK = threading.Lock()
+
+
 class DeviceClient:
-    def __init__(self, record, timeout=10):
+    def __init__(self, record, timeout=10, sequence_provider=None, request_recorder=None):
         self.record = record
         self.timeout = int(timeout)
+        self.api_metadata = None
+        self.sequence_provider = sequence_provider
+        self.request_recorder = request_recorder
+        self.last_request_key = None
+        with _DEVICE_REQUEST_LOCK:
+            self.request_lock = _DEVICE_REQUEST_LOCKS.setdefault(
+                (str(record.get('host', '')).lower(), int(record.get('port', 8444))), threading.RLock())
 
     def _context(self):
         context = ssl.create_default_context(cafile=self.record['ca_path'])
@@ -94,6 +106,46 @@ class DeviceClient:
         return context
 
     def request(self, path, method='GET', payload=None, content_type='application/json'):
+        with self.request_lock:
+            return self._serial_request(path, method, payload, content_type)
+
+    def _serial_request(self, path, method, payload, content_type):
+        if path != '/api/v3' and not path.startswith('/api/v3/'):
+            raise ValueError('Management requires Device API v3')
+        if self.api_metadata is None and path != '/api/v3':
+            metadata = self._request('/api/v3')
+            if not isinstance(metadata, dict) or metadata.get('api_version') != 3:
+                raise ValueError('Device API v3 required; update IoT-MD and Management together')
+            self.api_metadata = metadata
+        headers = {}
+        if method == 'POST':
+            metadata = self.api_metadata or {}
+            if not metadata.get('capabilities', {}).get('persistent_idempotency') or not self.sequence_provider:
+                raise ValueError('Durable Device API v3 operations required; update IoT-MD and Management together')
+            minimum = metadata.get('next_request_sequence')
+            if not isinstance(minimum, int) or isinstance(minimum, bool) or not 1 <= minimum <= 9007199254740991:
+                raise ValueError('Invalid device mutation sequence')
+            sequence = self.sequence_provider(minimum)
+            self.last_request_key = str(sequence) + '.' + secrets.token_hex(8)
+            headers['Idempotency-Key'] = self.last_request_key
+            metadata['next_request_sequence'] = sequence + 1
+            if self.request_recorder:
+                self.request_recorder(self.last_request_key, method, path, 'reserved', '')
+        try:
+            result = self._request(path, method, payload, content_type, headers)
+        except Exception:
+            if method == 'POST' and self.request_recorder:
+                self.request_recorder(self.last_request_key, method, path, 'uncertain', '')
+            raise
+        if not isinstance(result, dict) or result.get('api_version') != 3:
+            raise ValueError('Invalid Device API v3 response')
+        if method == 'POST' and self.request_recorder:
+            operation = result.get('operation', {})
+            self.request_recorder(self.last_request_key, method, path,
+                operation.get('status', 'uncertain'), operation.get('id', ''))
+        return result
+
+    def _request(self, path, method='GET', payload=None, content_type='application/json', headers=None):
         body = None if payload is None else (
             bytes(payload) if isinstance(payload, (bytes, bytearray))
             else json.dumps(payload).encode()
@@ -101,7 +153,7 @@ class DeviceClient:
         request = urllib.request.Request(
             'https://' + self.record['host'] + ':' + str(self.record['port']) + path,
             data=body, method=method,
-            headers={'Content-Type': content_type, 'Accept': 'application/json'},
+            headers=dict({'Content-Type': content_type, 'Accept': 'application/json'}, **(headers or {})),
         )
         try:
             with urllib.request.urlopen(
@@ -112,8 +164,12 @@ class DeviceClient:
             try:
                 value = json.loads(exc.read())
                 detail = value.get('error') if isinstance(value, dict) else value
+                if isinstance(detail, dict):
+                    detail = detail.get('message') or detail.get('code')
             except Exception:
                 detail = str(exc)
+            if path == '/api/v3' and exc.code in (404, 410):
+                detail = 'Device API v3 required; update IoT-MD and Management together'
             raise ValueError(bounded_text(detail, 256)) from None
 
 
@@ -128,7 +184,10 @@ class FleetController:
     def _client(self, record, timeout=None):
         settings = dict(record)
         settings.update(self.tls)
-        return DeviceClient(settings, self.timeout if timeout is None else timeout)
+        return DeviceClient(settings, self.timeout if timeout is None else timeout,
+            sequence_provider=lambda minimum: self.store.next_api_sequence(minimum),
+            request_recorder=lambda key, method, path, state, operation: self.store.record_api_request(
+                record['id'], key, method, path, state, operation))
 
     def create_backup(self, identifier, source='manual', retention=7):
         record = self.store.get_device(identifier, public=False)
@@ -139,7 +198,7 @@ class FleetController:
         password = secrets.token_urlsafe(32)
         salt, derived_key = backup_derived_key(password)
         result = self._client(record, timeout=max(self.timeout, 60)).request(
-            '/api/v2/configuration/backups', 'POST', {
+            '/api/v3/configuration/backups', 'POST', {
                 'salt': salt.hex(), 'derived_key': derived_key.hex(),
             }
         )
@@ -209,7 +268,7 @@ class FleetController:
             raise ValueError('encrypted backup salt is invalid') from None
         _salt, derived_key = backup_derived_key(backup['password'], salt)
         result = self._client(target, timeout=max(self.timeout, 60)).request(
-            '/api/v2/configuration/backups/preview', 'POST', {
+            '/api/v3/configuration/backups/preview', 'POST', {
                 'backup': backup['envelope'],
                 'derived_key': derived_key.hex(),
                 'sections': selected,
@@ -233,7 +292,7 @@ class FleetController:
         preview = self.preview_backup_restore(backup_id, target_id, sections)
         target = self.store.get_device(target_id, public=False)
         result = self._client(target, timeout=max(self.timeout, 60)).request(
-            '/api/v2/configuration/backups/apply', 'POST', {
+            '/api/v3/configuration/backups/apply', 'POST', {
                 'token': preview.get('token', '')
             }
         )
@@ -268,14 +327,14 @@ class FleetController:
             # Metadata belongs to the enrolled device, not a newly edited address.
             record = self.store.get_device(identifier, public=False)
             client = self._client(record)
-            result = client.request('/api/v2/configuration/profile', 'POST', {
+            result = client.request('/api/v3/configuration/profile', 'POST', {
                 'format_version': 1, 'name': 'Device description',
                 'settings': {'device_description': description},
             })
             if not result.get('accepted') or 'device_description' not in (
                     result.get('profile') or {}).get('applied_settings', []):
                 raise ValueError('Device did not accept the description update')
-            configuration = client.request('/api/v2/configuration').get('configuration') or {}
+            configuration = client.request('/api/v3/configuration').get('configuration') or {}
             if configuration.get('device_description') != description:
                 raise ValueError('Device accepted the description update but its saved configuration did not confirm it. Refresh the device and retry; check that its application supports device descriptions.')
         self.store.update_device(identifier, changes)
@@ -292,20 +351,20 @@ class FleetController:
         cursor = int(record.get('event_cursor', 0))
         client = self._client(record)
         try:
-            inventory = client.request('/api/v2/device/inventory')
-            configuration = client.request('/api/v2/configuration')
+            inventory = client.request('/api/v3/device/inventory')
+            configuration = client.request('/api/v3/configuration')
             if (configuration.get('configuration') or {}).get(
                 'network_trial_confirmation_ready'
             ):
                 confirmation = client.request(
-                    '/api/v2/configuration/network/confirm', 'POST', {}
+                    '/api/v3/configuration/network/confirm', 'POST', {}
                 )
                 if confirmation.get('confirmed'):
                     configuration['configuration']['network_trial_pending'] = False
             inventory['configuration'] = configuration.get('configuration') or {}
-            health = client.request('/api/v2/health')
+            health = client.request('/api/v3/health')
             events = client.request(
-                '/api/v2/events?cursor=' + str(cursor) + '&limit=64'
+                '/api/v3/events?cursor=' + str(cursor) + '&limit=64'
             )
         except Exception as exc:
             self.store.set_device_error(identifier, device_connection_error(exc))
@@ -675,22 +734,22 @@ class FleetController:
         device_profile['secrets'] = protected
         if device_profile.get('settings') or protected:
             result = client.request(
-                '/api/v2/configuration/profile', 'POST', device_profile
+                '/api/v3/configuration/profile', 'POST', device_profile
             )
         else:
             result = {'accepted': True, 'profile': {'applied_settings': []}}
         for kind, payload in certificate_values.items():
             client.request(
-                '/api/v2/configuration/certificates/' + kind, 'POST', payload,
+                '/api/v3/configuration/certificates/' + kind, 'POST', payload,
                 'application/octet-stream'
             )
         if certificate_values:
             result['certificates'] = client.request(
-                '/api/v2/configuration/certificates/apply', 'POST', {}
+                '/api/v3/configuration/certificates/apply', 'POST', {}
             )
         if (result.get('profile') or {}).get('network_trial_pending'):
             result['restart'] = client.request(
-                '/api/v2/configuration/restart', 'POST', {}
+                '/api/v3/configuration/restart', 'POST', {}
             )
         self.poll_device(identifier)
         return result
@@ -793,7 +852,7 @@ class FleetController:
         signed = self.signer.sign(policy)
         try:
             result = self._client(record, max(30, self.timeout)).request(
-                '/api/v2/fleet/policy', 'POST', signed
+                '/api/v3/fleet/policy', 'POST', signed
             )
         except ValueError as exc:
             if 'fleet policy signature verification failed' in str(exc):

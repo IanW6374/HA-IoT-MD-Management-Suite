@@ -828,6 +828,33 @@ class FleetRepository:
             raise ValueError('configuration profile does not exist')
         return {'deleted': True, 'name': str(name)}
 
+    def record_api_request(self, device, key, method, path, state, operation):
+        """Persist request identity, never credentials or mutation payloads."""
+        with self.lock, self.connection:
+            row = self.connection.execute('SELECT value FROM metadata WHERE key=?',
+                ('api_request_journal',)).fetchone()
+            records = json.loads(row['value']) if row else []
+            current = next((item for item in records if item['key'] == key and item['device'] == device), None)
+            if current is None:
+                current = {'device': str(device), 'key': str(key), 'method': str(method),
+                    'path': str(path), 'created_at': self.now()}
+                records.append(current)
+            current.update(state=str(state), operation_id=str(operation))
+            self.connection.execute('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)',
+                ('api_request_journal', json.dumps(records[-64:])))
+
+    def next_api_sequence(self, minimum=1):
+        """Commit allocation before a write; gaps are safe, reuse is not."""
+        with self.lock, self.connection:
+            row = self.connection.execute('SELECT value FROM metadata WHERE key=?',
+                ('next_api_sequence',)).fetchone()
+            value = max(int(minimum), int(row['value']) if row else 1)
+            if not 1 <= value <= 9007199254740991:
+                raise ValueError('Device API sequence exhausted')
+            self.connection.execute('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)',
+                ('next_api_sequence', str(value + 1)))
+        return value
+
     def next_policy_sequence(self):
         with self.lock, self.connection:
             row = self.connection.execute(

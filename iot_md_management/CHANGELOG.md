@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.0.0
+
+- Persist monotonic Device API mutation sequences and request keys before
+  sending writes; serialize requests per device. Require durable v3 operations
+  and retain uncertain outcomes without automatic retries.
+- Require Device API v3 and verify authenticated discovery before device
+  operations. Update every polling, profile, certificate, backup, restore and
+  fleet policy route to v3; do not fall back to v2.
+- Explain the coordinated upgrade requirement for older devices without
+  misreporting TLS timeouts or permission errors as version incompatibility.
+- Read structured device errors and reject mismatched response versions.
+- Keep existing devices, encrypted backups, profiles and history. Upgrade
+  devices to IoT-MD Alpha 108 locally before installing this breaking release;
+  no fresh install is required. Ambiguous mutations are never auto-retried.
+
 ## 2.8.22
 
 - Use one grouped device picker for deployments and backups instead of

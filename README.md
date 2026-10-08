@@ -1,5 +1,9 @@
 # IoT MD Management Suite
 
+Management 3.0.0 requires IoT-MD Device API v3 (Alpha 108 or newer). Upgrade
+devices through their local portals before upgrading this add-on. API v2 is
+retired with no fallback; existing records and encrypted backups are retained.
+
 Public Home Assistant add-on repository for fleet and secure release management
 of [IoT Modular Device](https://github.com/IanW6374/IoT-Modular-Device).
 
