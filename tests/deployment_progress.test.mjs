@@ -32,3 +32,22 @@ test('queued targets remain in the denominator even without a result entry',()=>
   context.deployment={targets:['one','two'],results:{one:{status:'complete'}},update:{release_type:'universal'}};
   assert.match(vm.runInContext('flowFor(deployment)',context),/<b>1\/2<\/b>/);
 });
+test('staged devices complete all staging boundaries even when telemetry polls were missed',()=>{
+  const html=render({one:{status:'staged'},two:{status:'installing'}});
+  assert.equal((html.match(/<b>✓<\/b>/g)||[]).length,7);
+  assert.match(html,/milestone-progress:0%.*?Restart & install/);
+  assert.match(html,/milestone-progress:0%.*?Confirm healthy/);
+});
+test('all confirmed devices produce 100 percent and green ticks at every milestone',()=>{
+  for(const type of ['universal','application','firmware']){
+    const html=render({one:{status:'complete'},two:{status:'complete'},three:{status:'complete'}},type);
+    const count=type==='universal'?9:4;
+    assert.equal((html.match(/milestone-progress:100%/g)||[]).length,count);
+    assert.equal((html.match(/<b>✓<\/b>/g)||[]).length,count);
+  }
+});
+test('failed device retains prior staged milestones but does not count as confirmed',()=>{
+  const html=render({one:{status:'complete'},two:{status:'failed',milestone_rank:2}});
+  assert.equal((html.match(/<b>✓<\/b>/g)||[]).length,7);
+  assert.match(html,/milestone-progress:50%.*?<b>1\/2<\/b>.*?Confirm healthy/);
+});

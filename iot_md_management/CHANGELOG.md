@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.8.22
+
+- Use one grouped device picker for deployments and backups instead of
+  separate Selected devices / Groups / All enabled targeting modes.
+- Remove the Management Name field from Device settings; keep Hostname and
+  optional Description as the visible identity fields.
+- Make deployment job failures terminal instead of silently retrying device
+  writes and resurrecting failed actions after API permissions change.
+  Existing terminal retry jobs cannot replay an accepted deployment.
+- Reject overlapping deployments for the same device, including a worker
+  safety check for previously queued actions. Polling cannot mark an unstarted
+  profile deployment complete.
+- Preserve staging milestones when telemetry phases are missed; count every
+  target independently, retaining completed boundaries after failure. Only
+  confirmed installations complete the final milestone.
+
 ## 2.8.21
 
 - Use the profile-style searchable grouped selector for deployment and backup

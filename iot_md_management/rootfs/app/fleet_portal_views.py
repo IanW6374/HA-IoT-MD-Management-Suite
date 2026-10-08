@@ -1,10 +1,19 @@
 """Compose fleet list/editor views without disturbing action/USB workflows."""
 
+import re
 from pathlib import Path
 
 
 def compose(html):
     assets = Path(__file__).with_name('assets')
+    # Groups and select-all are inside the device picker, not separate modes.
+    html = re.sub(
+        r'<div class="scope-tabs"><label><input type="radio" name="(?:backup_)?target_scope".*?</div>',
+        '', html,
+    )
+    html = html.replace('<label>Name<input name="name" value="${esc(device.name)}" required></label>', '')
+    html = html.replace("scopeSelected=!!document.querySelector('[name=\"target_scope\"]:checked')", 'scopeSelected=true')
+    html = html.replace("const scope=document.querySelector('[name=\"target_scope\"]:checked')?.value||'',activation=", "const scope='devices',activation=")
     # Replace renderers rather than emitting conflicting function definitions.
     prefixes = ('function deviceConnectionBadges(', 'function renderReleases(',
                 'function renderProfiles(', 'async function setReleaseChannel(',

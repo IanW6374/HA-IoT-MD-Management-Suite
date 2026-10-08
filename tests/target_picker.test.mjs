@@ -13,14 +13,32 @@ test('composed portal scripts parse without conflicting component declarations',
   const dom=new JSDOM(html);
   for(const script of dom.window.document.querySelectorAll('script:not([src])'))new vm.Script(script.textContent);
   assert.ok(html.includes('form_controls.css') || html.includes('Portfolio form rhythm'));
+  assert.equal(dom.window.document.querySelectorAll('input[name=target_scope],input[name=backup_target_scope]').length,0);
+  assert.equal(html.includes("scopeSelected=true"),true);
+  assert.equal(html.includes("const scope='devices',activation="),true);
+  assert.equal(html.includes('<label>Name<input name="name" value="${esc(device.name)}"'),false);
+  dom.window.close();
+});
+test('group and all choices resolve selected devices for both action payloads without a scope choice',()=>{
+  const dom=fixture(),doc=dom.window.document;
+  const source=fs.readFileSync(new URL('../iot_md_management/rootfs/app/management_portal.py',import.meta.url),'utf8');
+  dom.window.eval('var state=window.targetTestState;state.devices.forEach(device=>device.enabled=true);'+source.split('\n').filter(line=>line.startsWith('function selectedDevices(')||line.startsWith('function selectedBackupTargets(')).join('\n'));
+  const group=doc.querySelector('#device-targets .profile-group-choice input');group.checked=true;group.dispatchEvent(new dom.window.Event('change',{bubbles:true}));
+  assert.deepEqual(Array.from(dom.window.selectedDevices(),item=>item.id),['one.local','two.local']);
+  const all=doc.querySelector('#backup-device-targets .profile-selection-tools input');all.checked=true;all.dispatchEvent(new dom.window.Event('change',{bubbles:true}));
+  const selection=dom.window.selectedBackupTargets();
+  assert.equal(selection.target_scope,'devices');
+  assert.equal(selection.targets.length,3);assert.equal(selection.devices.length,3);
+  assert.equal(selection.cohorts.length,0);
   dom.window.close();
 });
 function fixture() {
   const dom = new JSDOM('<main><form id="deploy"><div id="device-targets"></div><div id="cohort-targets"></div></form><form id="backup"><div id="backup-device-targets"></div><div id="backup-cohort-targets"></div></form></main>', {runScripts:'outside-only', pretendToBeVisual:true});
   dom.window.eval(`const state={devices:[{id:'one.local',name:'One',cohort:'Heating'},{id:'two.local',name:'Two',cohort:'Heating'},{id:'three.local',name:'Three',cohort:'Lighting'}]};
     function renderTargets(){const box=document.getElementById('device-targets'),selected=new Set([...box.querySelectorAll('input:checked')].map(input=>input.value));box.innerHTML=state.devices.map(device=>'<label class="check"><input type="checkbox" name="target_device" value="'+device.id+'" '+(selected.has(device.id)?'checked':'')+'><span>'+device.name+'</span></label>').join('');}
-    function renderBackupTargets(){document.getElementById('backup-device-targets').innerHTML='<label><input type="checkbox" name="backup_target_device" value="one.local"><span>One</span></label>';}
+    function renderBackupTargets(){document.getElementById('backup-device-targets').innerHTML=state.devices.map(device=>'<label><input type="checkbox" name="backup_target_device" value="'+device.id+'"><span>'+device.name+'</span></label>').join('');}
     async function refreshBackups(){}
+    window.targetTestState=state;
   ` + asset('target_picker.js'));
   dom.window.eval('renderTargets();renderBackupTargets();');
   return dom;

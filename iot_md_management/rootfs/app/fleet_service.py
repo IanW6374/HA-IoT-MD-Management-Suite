@@ -360,6 +360,9 @@ class FleetController:
             if identifier not in deployment['targets']:
                 continue
             current = deployment['results'].get(identifier, {}).get('status', '')
+            if current in ('queued', 'running'):
+                # Polling inventory is not proof that a queued profile ran.
+                continue
             if current in ('complete', 'failed') or (
                 current == 'staged' and deployment.get('activation') == 'stage'
             ):
@@ -545,10 +548,29 @@ class FleetController:
         deployment = self.store.get_deployment(deployment_id)
         if not deployment:
             raise ValueError('deployment does not exist')
+        if identifier not in deployment['targets']:
+            raise ValueError('device is not part of this deployment')
+        current = deployment['results'].get(identifier, {})
+        if current.get('status') in ('complete', 'failed') or (
+            current.get('status') == 'staged' and deployment['activation'] == 'stage'
+        ):
+            # Old retry jobs must not resurrect an action from history.
+            return current
+        if current.get('status') != 'queued':
+            # An accepted/ambiguous device mutation must not be replayed.
+            return current
         self.store.set_deployment_target(
             deployment_id, identifier, 'running', 'Connecting to device'
         )
         try:
+            for other in self.store.list_deployments(limit=1000):
+                if other['id'] == deployment_id or identifier not in other['targets']:
+                    continue
+                status = other['results'].get(identifier, {}).get('status', 'queued')
+                if status not in ('queued', 'complete', 'failed') and not (
+                    status == 'staged' and other['activation'] == 'stage'
+                ):
+                    raise ValueError('Device already has an in-flight deployment: ' + other['id'])
             if deployment.get('profile_name'):
                 profile = self.store.get_profile(
                     deployment['profile_name'], include_secrets=True

@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 2.8.21', addon)
+        self.assertIn('version: 2.8.22', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -410,9 +410,9 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertIn('name="action_mode" value="deploy"', self.module.HTML)
         self.assertIn('name="action_mode" value="backup"', self.module.HTML)
         self.assertIn('name="action_mode" value="restore"', self.module.HTML)
-        self.assertIn('Selected devices', self.module.HTML)
+        self.assertNotIn('<strong>Selected devices</strong>', self.module.HTML)
         self.assertIn('Groups', self.module.HTML)
-        self.assertIn('All enabled', self.module.HTML)
+        self.assertNotIn('<strong>All enabled</strong>', self.module.HTML)
         self.assertIn('An update, a configuration profile, or both', self.module.HTML)
         self.assertIn("document.querySelector('#deployment-form>.panel>.flow')", self.module.HTML)
         self.assertIn('if(workflow)workflow.remove()', self.module.HTML)
@@ -1961,6 +1961,105 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertEqual(result['status'], 'checking')
         self.assertEqual(result['milestone_rank'], 3)
 
+    def test_deployment_failure_does_not_retry_or_resurrect_after_scope_change(self):
+        from fleet_service import FleetController
+        store = self.module.FleetStore(Path(self.temp.name) / 'scope-failure.db')
+        self.addCleanup(store.close)
+        store.register({'id': 'one', 'host': 'one.local', 'ca_path': '/ssl/ca.pem',
+                        'cert_path': '/ssl/client.pem', 'key_path': '/ssl/key.pem'})
+        controller = FleetController(store, mock.Mock())
+        controller.apply_policy = mock.Mock(side_effect=ValueError('API update:write scope required'))
+        request = {'activation': 'now', 'targets': ['one'], 'update': {
+            'release_sequence': 2811, 'release_type': 'universal'}}
+        deployment = controller.create_deployment(request)
+        job = store.claim_job()
+        with self.assertRaisesRegex(ValueError, 'scope required'):
+            controller.execute_deployment_target(deployment['id'], 'one')
+        store.fail_job(job['id'], 'API update:write scope required')
+        self.assertEqual(store.get_job(job['id'])['status'], 'failed')
+        self.assertEqual(store.get_deployment(deployment['id'])['status'], 'failed')
+        self.assertEqual(store.active_jobs('deployment'), [])
+        controller.apply_policy.side_effect = None
+        controller.execute_deployment_target(deployment['id'], 'one')
+        self.assertEqual(controller.apply_policy.call_count, 1)
+        self.assertEqual(store.get_deployment(deployment['id'])['status'], 'failed')
+        fresh = controller.create_deployment(request)
+        controller.execute_deployment_target(fresh['id'], 'one')
+        self.assertEqual(controller.apply_policy.call_count, 2)
+
+    def test_overlapping_deployments_are_rejected_without_partial_creation(self):
+        store = self.module.FleetStore(Path(self.temp.name) / 'overlap.db')
+        self.addCleanup(store.close)
+        first = store.create_deployment({'activation': 'now', 'profile_name': 'Example'}, ['one'])
+        for status in ('queued', 'checking', 'staged', 'installing'):
+            store.set_deployment_target(first['id'], 'one', status)
+            with self.assertRaisesRegex(ValueError, 'already has an in-flight deployment'):
+                store.create_deployment({'profile_name': 'Example'}, ['two', 'one'])
+            self.assertEqual(len(store.list_deployments()), 1)
+        store.set_deployment_target(first['id'], 'one', 'failed')
+        store.create_deployment({'profile_name': 'Example'}, ['one'])
+
+    def test_completed_profile_is_not_reapplied_and_queued_profile_is_not_confirmed_by_poll(self):
+        from fleet_service import FleetController
+        store = self.module.FleetStore(Path(self.temp.name) / 'profile-once.db')
+        self.addCleanup(store.close)
+        store.save_profile({'name': 'Example', 'settings': {'syslog_enabled': True}})
+        deployment = store.create_deployment({'profile_name': 'Example'}, ['one'])
+        controller = FleetController(store, mock.Mock())
+        controller.apply_profile = mock.Mock()
+        controller._reconcile_deployments('one', {'inventory': {}, 'fleet': {}})
+        self.assertEqual(store.get_deployment(deployment['id'])['status'], 'queued')
+        controller.execute_deployment_target(deployment['id'], 'one')
+        controller.execute_deployment_target(deployment['id'], 'one')
+        controller.apply_profile.assert_called_once()
+
+    def test_legacy_queued_duplicate_cannot_overwrite_an_accepted_deployment(self):
+        from fleet_service import FleetController
+        store = self.module.FleetStore(Path(self.temp.name) / 'legacy-duplicate.db')
+        self.addCleanup(store.close)
+        request = {'activation': 'now', 'update': {
+            'release_sequence': 2811, 'release_type': 'universal'}}
+        first = store.create_deployment(request, ['one'])
+        store.set_deployment_target(first['id'], 'one', 'failed')
+        duplicate = store.create_deployment(request, ['one'])
+        # Model records created by the old retry behavior before upgrading.
+        store.set_deployment_target(first['id'], 'one', 'checking')
+        controller = FleetController(store, mock.Mock())
+        controller.apply_policy = mock.Mock()
+        controller.execute_deployment_target(first['id'], 'one')
+        with self.assertRaisesRegex(ValueError, 'already has an in-flight deployment'):
+            controller.execute_deployment_target(duplicate['id'], 'one')
+        controller.apply_policy.assert_not_called()
+        self.assertEqual(store.get_deployment(first['id'])['results']['one']['status'], 'checking')
+        self.assertEqual(store.get_deployment(duplicate['id'])['results']['one']['status'], 'failed')
+
+    def test_worker_failure_closes_a_queued_deployment_target(self):
+        store = self.module.FleetStore(Path(self.temp.name) / 'worker-failure.db')
+        self.addCleanup(store.close)
+        deployment = store.create_deployment({'profile_name': 'Example'}, ['one'])
+        job = store.enqueue_job('deployment', deployment['id'], {'device_id': 'one'})
+        store.claim_job()
+        store.fail_job(job['id'], 'Worker interrupted before dispatch')
+        self.assertEqual(store.get_job(job['id'])['status'], 'failed')
+        self.assertEqual(store.get_deployment(deployment['id'])['results']['one']['status'], 'failed')
+
+    def test_universal_staged_milestones_survive_missed_polls_and_failures(self):
+        store = self.module.FleetStore(Path(self.temp.name) / 'missed-polls.db')
+        self.addCleanup(store.close)
+        deployment = store.create_deployment({'activation': 'now', 'update': {
+            'release_sequence': 2811, 'release_type': 'universal'}}, ['one', 'two'])
+        store.set_deployment_target(deployment['id'], 'one', 'staged')
+        result = store.get_deployment(deployment['id'])['results']['one']
+        self.assertEqual(result['update_milestones'][-1], 'pair')
+        self.assertNotIn('install', result['update_milestones'])
+        store.set_deployment_target(deployment['id'], 'one', 'failed')
+        self.assertEqual(store.get_deployment(deployment['id'])['results']['one']['update_milestones'], result['update_milestones'])
+        store.set_deployment_target(deployment['id'], 'two', 'complete')
+        self.assertEqual(store.get_deployment(deployment['id'])['status'], 'partial')
+
+    def test_device_editor_does_not_expose_a_management_name(self):
+        self.assertNotIn('<label>Name<input name="name" value="${esc(device.name)}"', self.module.HTML)
+
     def test_install_now_connection_loss_does_not_imply_staging_completed(self):
         from fleet_service import FleetController
 
@@ -1984,7 +2083,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         result = store.get_deployment(deployment['id'])['results']['device-1']
         self.assertEqual(result['status'], 'staging')
         self.assertEqual(result['milestone_rank'], 1)
-        self.assertEqual(result['update_milestones'], [])
+        self.assertEqual(result['update_milestones'], ['queued'])
 
     def test_universal_progress_is_scoped_durable_and_not_confirmed_during_trial(self):
         from fleet_service import FleetController
@@ -1998,6 +2097,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         controller = FleetController(store, mock.Mock())
         command = {'id': 'download', 'action': 'download-update',
                    'release_type': 'universal', 'release_sequence': 2804}
+        store.set_deployment_target(deployment['id'], 'device-1', 'checking')
         record = {'inventory': {'device': {'release_sequence': 2803,
             'firmware_release_sequence': 2803, 'update_progress': {
                 'release_sequence': 2804, 'type': 'universal',
@@ -2095,9 +2195,8 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
             'Encrypted backup queued. It will appear below when complete.',
             self.module.HTML,
         )
-        self.assertIn('name="backup_target_scope" value="devices"', self.module.HTML)
-        self.assertIn('name="backup_target_scope" value="cohort"', self.module.HTML)
-        self.assertIn('name="backup_target_scope" value="all"', self.module.HTML)
+        self.assertNotIn('<input type="radio" name="backup_target_scope"', self.module.HTML)
+        self.assertIn("target_scope:'devices',targets,cohorts:[],devices", self.module.HTML)
         self.assertIn('signature!==backupState.renderSignature', self.module.HTML)
         self.assertIn('refreshBackups(true)', self.module.HTML)
         self.assertIn('function backupPreviewTable(preview)', self.module.HTML)

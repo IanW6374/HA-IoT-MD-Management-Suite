@@ -655,6 +655,18 @@ class FleetRepository:
         }
         now = self.now()
         with self.lock, self.connection:
+            rows = self.connection.execute(
+                "SELECT * FROM deployments WHERE status NOT IN ('complete','failed')"
+            ).fetchall()
+            for row in rows:
+                existing = self._deployment(row)
+                for target in set(targets).intersection(existing['targets']):
+                    result = existing['results'].get(target, {})
+                    status = result.get('status', 'queued')
+                    if status not in ('complete', 'failed') and not (
+                        status == 'staged' and existing['activation'] == 'stage'
+                    ):
+                        raise ValueError(target + ' already has an in-flight deployment: ' + existing['id'])
             try:
                 self.connection.execute('''
                     INSERT INTO deployments(
@@ -723,6 +735,12 @@ class FleetRepository:
             allowed = ('queued', 'inspect', 'core_write', 'core_verify',
                        'application_download', 'application_verify', 'pair',
                        'install', 'complete')
+            # A staged/installed target has passed earlier boundaries even if
+            # polling missed its short-lived telemetry phases.
+            passed = allowed if status == 'complete' else (
+                allowed[:7] if status in ('staged', 'scheduled', 'installing') else ('queued',)
+            )
+            milestones = [name for name in allowed if name in milestones or name in passed]
             if progress is not None:
                 milestones = [name for name in allowed if name in milestones or
                               name in progress.get('completed', ())]
@@ -730,10 +748,8 @@ class FleetRepository:
             deployment['results'][device_id]['update_phase'] = str(
                 (progress or {}).get('phase', previous_result.get('update_phase', ''))
             )[:40]
-            states = [
-                value.get('status', 'queued')
-                for value in deployment['results'].values()
-            ]
+            states = [deployment['results'].get(target, {}).get('status', 'queued')
+                      for target in deployment['targets']]
             if any(value not in terminal for value in states):
                 overall = 'active'
             elif all(value == 'failed' for value in states):
@@ -1026,7 +1042,10 @@ class FleetRepository:
             if row is None:
                 return
             attempts = int(row['attempts'])
-            status = 'failed' if attempts >= int(maximum_attempts) else 'queued'
+            job = self.get_job(identifier)
+            # Deployment writes are not safe to retry invisibly: a timed-out
+            # request may already have reached the device. Make failure final.
+            status = 'failed' if job['kind'] == 'deployment' or attempts >= int(maximum_attempts) else 'queued'
             delay = min(int(maximum_delay), 2 ** min(attempts, 10))
             self.connection.execute('''
                 UPDATE jobs SET status=?,not_before=?,updated_at=?,last_error=?
@@ -1035,6 +1054,13 @@ class FleetRepository:
                 status, self.now() + delay, self.now(), str(detail)[:256],
                 int(identifier)
             ))
+            if job['kind'] == 'deployment':
+                deployment = self.get_deployment(job['target'])
+                target = job['payload'].get('device_id', '')
+                if deployment and target in deployment['targets'] and (
+                    deployment['results'].get(target, {}).get('status') not in ('complete', 'failed', 'staged')
+                ):
+                    self.set_deployment_target(job['target'], target, 'failed', str(detail))
 
     def close(self):
         with self.lock:
