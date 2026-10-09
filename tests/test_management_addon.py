@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 3.0.0', addon)
+        self.assertIn('version: 3.0.1', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -1958,7 +1958,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         store.set_deployment_target(deployment['id'], 'device-1', 'installing')
         store.set_deployment_target(deployment['id'], 'device-1', 'checking')
         result = store.get_deployment(deployment['id'])['results']['device-1']
-        self.assertEqual(result['status'], 'checking')
+        self.assertEqual(result['status'], 'installing')
         self.assertEqual(result['milestone_rank'], 3)
 
     def test_deployment_failure_does_not_retry_or_resurrect_after_scope_change(self):
@@ -2023,7 +2023,11 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         store.set_deployment_target(first['id'], 'one', 'failed')
         duplicate = store.create_deployment(request, ['one'])
         # Model records created by the old retry behavior before upgrading.
-        store.set_deployment_target(first['id'], 'one', 'checking')
+        legacy = store.get_deployment(first['id'])['results']
+        legacy['one']['status'] = 'checking'
+        with store.lock, store.connection:
+            store.connection.execute('UPDATE deployments SET status=?,results=? WHERE id=?',
+                ('active', json.dumps(legacy), first['id']))
         controller = FleetController(store, mock.Mock())
         controller.apply_policy = mock.Mock()
         controller.execute_deployment_target(first['id'], 'one')
@@ -2120,6 +2124,60 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         result = store.get_deployment(deployment['id'])['results']['device-1']
         self.assertEqual(result['status'], 'complete')
         self.assertIn('install', result['update_milestones'])
+
+    def test_live_trials_override_stale_commands_for_each_device_without_premature_success(self):
+        from fleet_service import FleetController
+
+        store = self.module.FleetStore(Path(self.temp.name) / 'live-trials.db')
+        self.addCleanup(store.close)
+        update = {'release_sequence': 2814, 'release_type': 'universal', 'version': 'test'}
+        deployment = store.create_deployment({'activation': 'now', 'update': update}, ['one', 'two'])
+        controller = FleetController(store, mock.Mock())
+        for target in deployment['targets']:
+            store.set_deployment_target(deployment['id'], target, 'checking')
+        command = {'action': 'check-update', **update}
+        record = {'inventory': {'device': {
+            'release_sequence': 2814, 'firmware_release_sequence': 2814,
+            'update_progress': {'application_status': 'trial',
+                'application_sequence': 2814, 'universal_status': 'activating'},
+        }}, 'fleet': {'policy': {'commands': [command]}, 'pending_commands': [command]}}
+        controller._reconcile_deployments('one', record)
+        result = store.get_deployment(deployment['id'])['results']['one']
+        self.assertEqual(result['status'], 'installing')
+        self.assertEqual(result['update_phase'], 'install')
+        self.assertIn('pair', result['update_milestones'])
+        self.assertNotIn('complete', result['update_milestones'])
+        self.assertEqual(store.get_deployment(deployment['id'])['results']['two']['status'], 'checking')
+        # A delayed pre-restart snapshot must not rewind the observed trial.
+        stale = {'inventory': {'device': {'release_sequence': 2813,
+            'firmware_release_sequence': 2813}}, 'fleet': record['fleet']}
+        controller._reconcile_deployments('one', stale)
+        self.assertEqual(store.get_deployment(deployment['id'])['results']['one']['status'], 'installing')
+        record['inventory']['device']['update_progress'] = {'application_status': 'idle', 'firmware_status': 'idle', 'universal_status': 'idle'}
+        # Both components are necessary even when the queue is stale.
+        record['inventory']['device']['release_sequence'] = 2813
+        controller._reconcile_deployments('two', record)
+        self.assertNotEqual(store.get_deployment(deployment['id'])['results']['two']['status'], 'complete')
+        record['inventory']['device']['release_sequence'] = 2814
+        controller._reconcile_deployments('one', record)
+        controller._reconcile_deployments('two', record)
+        result = store.get_deployment(deployment['id'])
+        self.assertEqual(result['status'], 'complete')
+        self.assertTrue(all('complete' in item['update_milestones'] for item in result['results'].values()))
+
+    def test_poll_jobs_are_coalesced_across_intervals_including_running_poll(self):
+        store = self.module.FleetStore(Path(self.temp.name) / 'coalesced-polls.db')
+        self.addCleanup(store.close)
+        first = store.enqueue_job('poll', 'one', idempotency_key='slot-1')
+        for index in range(2, 8):
+            self.assertEqual(store.enqueue_job('poll', 'one', idempotency_key='slot-' + str(index))['id'], first['id'])
+        store.claim_job()
+        self.assertEqual(store.enqueue_job('poll', 'one', idempotency_key='slot-8')['id'], first['id'])
+        other = store.enqueue_job('poll', 'two', idempotency_key='other-slot-8')
+        self.assertNotEqual(other['id'], first['id'])
+        store.complete_job(first['id'])
+        fresh = store.enqueue_job('poll', 'one', idempotency_key='slot-9')
+        self.assertNotEqual(fresh['id'], first['id'])
 
     def test_install_now_is_recorded_as_all_day_admin_override(self):
         from fleet_service import FleetController

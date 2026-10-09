@@ -17,6 +17,8 @@ test('composed portal scripts parse without conflicting component declarations',
   assert.equal(html.includes("scopeSelected=true"),true);
   assert.equal(html.includes("const scope='devices',activation="),true);
   assert.equal(html.includes('<label>Name<input name="name" value="${esc(device.name)}"'),false);
+  assert.equal(html.includes('${deviceRefreshButton(device)}${devicePortalLink(device)}'),true);
+  assert.equal(html.includes("focusInfo.portal?'device-portal-link'"),true);
   dom.window.close();
 });
 test('group and all choices resolve selected devices for both action payloads without a scope choice',()=>{

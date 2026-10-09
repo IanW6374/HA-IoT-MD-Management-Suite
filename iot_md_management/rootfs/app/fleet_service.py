@@ -392,6 +392,26 @@ class FleetController:
             return firmware >= sequence
         return release_type == 'universal' and application >= sequence and firmware >= sequence
 
+    @staticmethod
+    def _installation_started(record, update, progress):
+        """Prefer a matching live trial over commands left pending across reset."""
+        device = (record.get('inventory') or {}).get('device') or {}
+        live = device.get('update_progress') or {}
+        sequence = int(update.get('release_sequence', 0))
+        release_type = update.get('release_type', '')
+        components = {
+            'application': ('application',), 'firmware': ('firmware',),
+            'universal': ('application', 'firmware', 'universal'),
+        }.get(release_type, ())
+        for component in components:
+            if live.get(component + '_status') not in ('trial', 'activating', 'committing'):
+                continue
+            running_key = 'firmware_release_sequence' if component == 'firmware' else 'release_sequence'
+            if (int(live.get(component + '_sequence', 0) or 0) == sequence or
+                    progress or int(device.get(running_key, 0) or 0) == sequence):
+                return True
+        return False
+
     def _mark_immediate_install_restart(self, identifier):
         """Keep fast install-now reboots from looking stuck in staging."""
         if not hasattr(self.store, 'list_deployments'):
@@ -469,6 +489,17 @@ class FleetController:
                 )
                 self.store.set_deployment_target(
                     deployment['id'], identifier, 'failed', detail, progress=progress
+                )
+                continue
+            if self._installation_started(record, update, progress):
+                progress = dict(progress)
+                progress['phase'] = 'install'
+                self.store.set_deployment_target(
+                    deployment['id'], identifier, 'installing',
+                    'Device restarted; waiting for core and application confirmation'
+                    if release_type == 'universal' else
+                    'Device restarted; waiting to confirm the installed version',
+                    progress=progress,
                 )
                 continue
             if pending:

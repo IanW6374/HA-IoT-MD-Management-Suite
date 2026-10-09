@@ -724,6 +724,12 @@ class FleetRepository:
             previous_rank = int(previous_result.get(
                 'milestone_rank', milestone_ranks.get(previous, 0)
             ) or 0)
+            # A late policy snapshot must not rewind an observed restart/stage.
+            # Failure still remains terminal and never gains successful milestones.
+            if previous in ('complete', 'failed') or (
+                status in milestone_ranks and milestone_ranks[status] < previous_rank
+            ):
+                return deployment
             milestone_rank = max(
                 previous_rank, milestone_ranks.get(str(status), previous_rank)
             )
@@ -990,6 +996,20 @@ class FleetRepository:
             str(kind) + ':' + str(target) + ':' + str(now)
         ))[:160]
         with self.lock, self.connection:
+            if kind == 'poll':
+                # Slow TLS/reboots must not accumulate a poll every ten seconds
+                # and leave all other devices/actions waiting behind that backlog.
+                pending = self.connection.execute('''
+                    SELECT * FROM jobs WHERE kind='poll' AND target=?
+                        AND status IN ('queued','running')
+                    ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END,id LIMIT 1
+                ''', (str(target),)).fetchone()
+                if pending is not None:
+                    self.connection.execute('''
+                        UPDATE jobs SET status='superseded',updated_at=?
+                        WHERE kind='poll' AND target=? AND status='queued' AND id<>?
+                    ''', (now, str(target), pending['id']))
+                    return self._job(pending)
             self.connection.execute('''
                 INSERT OR IGNORE INTO jobs(
                     idempotency_key,kind,target,payload,status,attempts,

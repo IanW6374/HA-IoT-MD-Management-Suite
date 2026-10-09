@@ -7,7 +7,7 @@ const source=fs.readFileSync(new URL('../iot_md_management/rootfs/app/assets/fle
 const now=1000;
 const healthy={enabled:true,last_seen:990,last_error:'',inventory:{device:{qualification_observation:{health_state:'healthy'},runtime:{lifecycle:{device_state:'running'},state:{network:'online',mqtt:'disabled'},tasks:{}}}}};
 function evaluate(code,extra={}){
-  const context=vm.createContext({device:structuredClone(healthy),now,when:value=>String(value),esc:String,deviceRetries:new Map(),...extra});
+  const context=vm.createContext({device:structuredClone(healthy),now,when:value=>String(value),esc:String,URL,deviceRetries:new Map(),...extra});
   vm.runInContext(source,context);
   return vm.runInContext(code,context);
 }
@@ -75,6 +75,29 @@ test('refresh is independent of API LEDs and remains available on healthy device
   assert.ok(!evaluate('deviceConnectionBadges(device)').includes('device-retry'));
   assert.match(evaluate('deviceRefreshButton(device)'),/Refresh connection and device health/);
   assert.equal(evaluate('deviceRefreshButton(device)',{device:{...healthy,enabled:false}}),'');
+});
+test('portal links use the discovered portal protocol/port, never the API port',()=>{
+  const device={...structuredClone(healthy),id:'device.local',host:'device.local',port:8444};
+  assert.equal(evaluate('devicePortalURL(device)',{device}),'https://device.local:8443/');
+  device.inventory.configuration={web_portal:{enabled:true,transport:'http',port:8080}};
+  assert.equal(evaluate('devicePortalURL(device)',{device}),'http://device.local:8080/');
+  const html=evaluate('devicePortalLink(device)',{device});
+  assert.match(html,/target="_blank" rel="noopener noreferrer"/);
+  assert.match(html,/aria-label="Open device.local portal in a new tab"/);
+  device.host='2001:db8::1';
+  assert.equal(evaluate('devicePortalURL(device)',{device}),'http://[2001:db8::1]:8080/');
+});
+test('portal links remain available without API health but disabled portals and unsafe addresses cannot navigate',()=>{
+  for(const host of ['javascript:alert(1)','https://device.local','evil@device.local','device.local/path','device.local" onclick="bad']){
+    assert.equal(evaluate('devicePortalURL(device)',{device:{...healthy,host}}),'');
+  }
+  const device={...structuredClone(healthy),host:'device.local',last_error:'TLS timeout',enabled:false};
+  assert.match(evaluate('devicePortalLink(device)',{device}),/href="https:\/\/device.local:8443\/"/);
+  device.inventory.configuration={web_portal:{enabled:false,port:8443}};
+  assert.equal(evaluate('devicePortalURL(device)',{device}),'');
+  assert.match(evaluate('devicePortalLink(device)',{device}),/disabled>/);
+  device.inventory.configuration.web_portal={enabled:true,port:70000};
+  assert.equal(evaluate('devicePortalURL(device)',{device}),'');
 });
 test('release search combines promoted/all filter with case-insensitive multiple words',()=>{
   const state={releases:[{version:'3.0.0-alpha.101',channels:['alpha'],release_sequence:2806},{version:'3.0.0-beta.1',channels:[],release_sequence:2807}],profiles:[]};

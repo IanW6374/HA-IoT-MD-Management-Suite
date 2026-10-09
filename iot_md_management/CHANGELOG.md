@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.0.1
+
+- Add a portal-open icon after each device row's Refresh control. Open a new
+  browser tab using the discovered portal protocol/port, not the mTLS API port.
+- Reconcile per-device trial/restart state ahead of stale pending update commands.
+  Require both universal components to be installed and out of trial before completion.
+- Keep observed deployment status and milestones monotonic; late snapshots cannot
+  rewind installation to checking/staging or reopen terminal targets.
+- Coalesce queued/running device polls across scheduling intervals, superseding
+  redundant queued polls so slow TLS/reboots cannot build an ever-growing backlog.
+
 ## 3.0.0
 
 - Persist monotonic Device API mutation sequences and request keys before
