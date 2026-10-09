@@ -237,3 +237,17 @@ See [security and operations](docs/OPERATIONS.md) for trust boundaries,
 certificate rotation, backups and release publishing.
 
 Licensed under Apache-2.0.
+
+## Shared device HTTPS identity (3.1.0)
+
+Use IoT-MD Alpha 110 with Certificate Authority 0.6.0. Configure devices using
+the canonical HTTPS hostname covered by the certificate, for example
+`iot-md-001.iot.example.com`, not its uncovered `.local` discovery alias.
+Keep the configured API port (8444 by default). Management trusts its private
+CA and system public roots, checks hostnames and supplies its enrolled private
+client certificate. Scopes and client trust remain enforced.
+
+Open portal uses the advertised HTTPS hostname and portal port. Profiles use
+one device HTTPS pair. Protocol-v1 managed devices must re-enroll for v2 renewal;
+no legacy migration is provided. Update locally before testing the new API
+identity, then set the matching hostname in Management.

@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 3.0.1', addon)
+        self.assertIn('version: 3.1.0', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -571,7 +571,8 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertIn("text('mqtt_password','MQTT password'", self.module.HTML)
         self.assertIn('data-profile-include', self.module.HTML)
         self.assertIn('allowing a profile to change one entity', self.module.HTML)
-        self.assertIn("file('certificate_portal','portal certificate'", self.module.HTML)
+        self.assertIn("file('certificate_portal','device HTTPS certificate'", self.module.HTML)
+        self.assertNotIn("file('certificate_api_server'", self.module.HTML)
         self.assertIn('/api/v3/configuration/profile', Path(
             self.module.__file__
         ).with_name('fleet_service.py').read_text())

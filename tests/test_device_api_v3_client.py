@@ -20,6 +20,22 @@ def response(value):
 
 
 class DeviceAPIv3ClientTests(unittest.TestCase):
+    def test_shared_https_context_keeps_hostname_checks_and_client_authentication(self):
+        client = SERVICE.DeviceClient({'host': 'device.example.com', 'port': 8444,
+            'ca_path': '/ssl/private-root.pem', 'cert_path': '/ssl/client.pem',
+            'key_path': '/ssl/client-key.pem'})
+        context = SERVICE.ssl.create_default_context()
+        with mock.patch.object(SERVICE.ssl, 'create_default_context', return_value=context) as factory, \
+             mock.patch.object(context, 'load_default_certs') as roots, \
+             mock.patch.object(context, 'load_cert_chain') as identity:
+            self.assertIs(client._context(), context)
+        factory.assert_called_once_with(cafile='/ssl/private-root.pem')
+        roots.assert_called_once_with()
+        identity.assert_called_once_with('/ssl/client.pem', '/ssl/client-key.pem')
+        self.assertTrue(context.check_hostname)
+        self.assertEqual(context.verify_mode, SERVICE.ssl.CERT_REQUIRED)
+        self.assertEqual(context.minimum_version, SERVICE.ssl.TLSVersion.TLSv1_2)
+
     def setUp(self):
         self.client = SERVICE.DeviceClient({'host': 'iot-md-001.local', 'port': 8444}, sequence_provider=lambda minimum: minimum)
         self.context = mock.patch.object(self.client, '_context', return_value=object())

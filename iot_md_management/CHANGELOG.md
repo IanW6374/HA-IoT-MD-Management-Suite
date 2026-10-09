@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.1.0
+
+- Use the device's advertised HTTPS hostname for Open portal links and tooltips.
+  API connections trust configured private roots and system public roots while
+  retaining hostname verification, client certificates and TLS 1.2 minimum.
+- Put Hostname before Description in Device settings.
+- Remove separate API server certificate/key profile fields; use one shared
+  device HTTPS identity with IoT-MD Alpha 110 and Certificate Authority 0.6.0.
+- Clarify the Management policy and catalog verification key labels.
+- Distinguish milestone completion counts from devices currently executing a
+  step. Mark failures on their incomplete step, retain completed progress and
+  avoid lighting every future milestone for a multi-device deployment.
+- Apply the same milestone counting to backups and scheduled/staged updates.
+
 ## 3.0.1
 
 - Add a portal-open icon after each device row's Refresh control. Open a new

@@ -39,13 +39,13 @@ function deviceRefreshButton(device){
   return `<button type="button" class="badge device-retry ${retry?.error?'bad':''}" data-device-id="${esc(device.id)}" onclick="pollDevice(this.dataset.deviceId,this)" title="${esc(title)}" aria-label="${esc(title)}" aria-busy="${pending}" ${pending?'disabled':''}><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 7v5h-5M4 17v-5h5M6.1 8a7 7 0 0 1 11.6-2L20 9M4 15l2.3 3A7 7 0 0 0 17.9 16"/></svg></button>`;
 }
 function devicePortalURL(device){
-  const portal=device.inventory?.configuration?.web_portal||{},host=String(device.host||'').trim(),port=Number(portal.port??8443);
+  const portal=device.inventory?.configuration?.web_portal||{},host=String(portal.hostname||device.host||'').trim(),port=Number(portal.port??8443);
   if(portal.enabled===false||!host||/[\s/\\?#@"'<>]/.test(host)||!Number.isInteger(port)||port<1||port>65535)return '';
   const authority=host.includes(':')&&!host.startsWith('[')?`[${host}]`:host;
   try{return new URL(`${portal.transport==='http'?'http':'https'}://${authority}:${port}/`).href}catch(_){return ''}
 }
 function devicePortalLink(device){
-  const url=devicePortalURL(device),label=url?`Open ${device.host} portal in a new tab`:'Device portal is disabled or its address is invalid',icon='<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14 3h7v7M21 3l-9 9M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5"/></svg>';
+  const url=devicePortalURL(device),label=url?`Open ${new URL(url).hostname} portal in a new tab`:'Device portal is disabled or its address is invalid',icon='<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14 3h7v7M21 3l-9 9M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5"/></svg>';
   return url?`<a class="badge device-portal-link" data-device-id="${esc(device.id)}" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="${esc(label)}" aria-label="${esc(label)}">${icon}</a>`:`<button type="button" class="badge device-portal-link" title="${esc(label)}" aria-label="${esc(label)}" disabled>${icon}</button>`;
 }
 function fleetHealthStatus(devices,now=Date.now()/1000){

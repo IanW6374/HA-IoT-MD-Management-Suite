@@ -99,6 +99,13 @@ test('portal links remain available without API health but disabled portals and 
   device.inventory.configuration.web_portal={enabled:true,port:70000};
   assert.equal(evaluate('devicePortalURL(device)',{device}),'');
 });
+test('portal links prefer the shared HTTPS identity hostname over the discovery alias',()=>{
+  const device={...structuredClone(healthy),host:'device.local',inventory:{configuration:{web_portal:{hostname:'device.example.com',port:8443}}}};
+  assert.equal(evaluate('devicePortalURL(device)',{device}),'https://device.example.com:8443/');
+  assert.match(evaluate('devicePortalLink(device)',{device}),/Open device.example.com portal/);
+  device.inventory.configuration.web_portal.hostname='evil.example/path';
+  assert.equal(evaluate('devicePortalURL(device)',{device}),'');
+});
 test('release search combines promoted/all filter with case-insensitive multiple words',()=>{
   const state={releases:[{version:'3.0.0-alpha.101',channels:['alpha'],release_sequence:2806},{version:'3.0.0-beta.1',channels:[],release_sequence:2807}],profiles:[]};
   assert.equal(evaluate("releaseSearch='ALPHA 2806';filteredReleases().length",{state,releaseFilter:'promoted'}),1);

@@ -101,6 +101,9 @@ class DeviceClient:
 
     def _context(self):
         context = ssl.create_default_context(cafile=self.record['ca_path'])
+        # Shared device HTTPS identities may be publicly issued; private roots
+        # remain trusted for locally issued identities. Host verification stays on.
+        context.load_default_certs()
         context.load_cert_chain(self.record['cert_path'], self.record['key_path'])
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         return context
@@ -750,8 +753,6 @@ class FleetController:
             'certificate_syslog_ca': 'syslog-ca',
             'certificate_portal': 'portal-cert',
             'certificate_portal_key': 'portal-key',
-            'certificate_api_server': 'api-server-cert',
-            'certificate_api_server_key': 'api-server-key',
             'certificate_api_client_ca': 'api-client-ca',
             'management_suite_key': 'management-suite-key',
         }

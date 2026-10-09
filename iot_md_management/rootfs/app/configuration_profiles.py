@@ -42,8 +42,7 @@ SECRET_FIELDS = {
     'wifi_password': 64, 'mqtt_password': 256,
     'certificate_mqtt_ca': 32768, 'certificate_release_ca': 32768,
     'certificate_syslog_ca': 32768, 'certificate_portal': 32768,
-    'certificate_portal_key': 32768, 'certificate_api_server': 32768,
-    'certificate_api_server_key': 32768, 'certificate_api_client_ca': 32768,
+    'certificate_portal_key': 32768, 'certificate_api_client_ca': 32768,
     'management_suite_key': 32768,
 }
 CERTIFICATE_SECRET_FIELDS = {
@@ -152,7 +151,6 @@ def normalize_profile(profile):
         normalized_secrets[name] = value
     for certificate, private_key in (
         ('certificate_portal', 'certificate_portal_key'),
-        ('certificate_api_server', 'certificate_api_server_key'),
     ):
         if bool(normalized_secrets.get(certificate)) != bool(
             normalized_secrets.get(private_key)

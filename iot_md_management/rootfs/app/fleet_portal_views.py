@@ -12,6 +12,10 @@ def compose(html):
         '', html,
     )
     html = html.replace('<label>Name<input name="name" value="${esc(device.name)}" required></label>', '')
+    html = re.sub(
+        r'(<label>Description<input name="description"[^<]*</label>)(<label>Hostname<input name="host"[^<]*</label>)',
+        r'\2\1', html,
+    )
     html = html.replace("scopeSelected=!!document.querySelector('[name=\"target_scope\"]:checked')", 'scopeSelected=true')
     html = html.replace("const scope=document.querySelector('[name=\"target_scope\"]:checked')?.value||'',activation=", "const scope='devices',activation=")
     # Replace renderers rather than emitting conflicting function definitions.
