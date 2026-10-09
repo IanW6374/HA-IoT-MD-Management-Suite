@@ -1,7 +1,7 @@
 ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
-RUN apk add --no-cache nginx
+RUN apk add --no-cache nginx ca-certificates
 COPY requirements.txt /tmp/requirements.txt
 RUN python3 -m pip install --no-cache-dir --only-binary=:all: -r /tmp/requirements.txt
 COPY rootfs /
