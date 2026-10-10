@@ -6,8 +6,16 @@ from pathlib import Path
 
 def compose(html):
     assets = Path(__file__).with_name('assets')
-    html = html.replace('${flowFor(deployment)}${deviceResults}</article>',
-                        '${flowFor(deployment)}${deviceResults}${updateCancelControls(deployment)}</article>')
+    # Place cancellation badges with live statuses, never in history rows.
+    lines = html.split('\n')
+    for index, line in enumerate(lines):
+        if line.startswith('function deploymentTargets('):
+            line = line.replace("${esc(result.detail||'')}</small></div>${statusBadge(result.status)}", "${esc(result.detail||'')}</small>${updateCancelError(deployment,id)}</div><div class=\"deployment-status-actions\">${updateCancelDeviceBadge(deployment,id)}${statusBadge(result.status)}</div>")
+        elif line.startswith('function activeDeploymentCard('):
+            line = line.replace('${statusBadge(deployment.status)}</div>', '<div class="deployment-status-actions">${updateCancelAllBadge(deployment)}${statusBadge(deployment.status)}</div></div>')
+            line = line.replace("${targets}</div></details>`:''", "${targets}</div></details>`:`<div class=\"deployment-targets\">${targets}</div>`")
+        lines[index] = line
+    html = '\n'.join(lines)
     html = html.replace("['complete','failed','partial','staged']", "['complete','failed','partial','staged','cancelled']")
     html = html.replace("warn=['queued'", "warn=['cancelling','cancelled','queued'")
     html = html.replace('const activePage=', (assets / 'update_cancel.js').read_text() + '\nconst activePage=', 1)

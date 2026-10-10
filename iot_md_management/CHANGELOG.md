@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.2.1 - 2026-10-10
+
+- Place compact per-device cancellation badges immediately before live statuses,
+  including single-device jobs. Place Cancel all immediately before job status.
+- Cancel all confirms once and submits eligible device cancellations sequentially;
+  skip installation already in progress, surface individual failures, and never
+  automatically replay an unconfirmed cancellation.
+
 ## 3.2.0 - 2026-10-10
 
 - Run automatic device health checks independently of deployments/backups.
