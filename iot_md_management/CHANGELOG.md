@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.2.0 - 2026-10-10
 
 - Run automatic device health checks independently of deployments/backups.
   Recover orphaned read-only poll jobs on startup without replaying mutations.
