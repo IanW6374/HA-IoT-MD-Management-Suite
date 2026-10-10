@@ -49,18 +49,19 @@ function batchFixture(){
   context.button={dataset:{deployment:'deploy'}};
   return context;
 }
-test('Cancel all confirms once and cancels only eligible devices sequentially',async()=>{
-  const context=batchFixture(),calls=[];let confirmations=0,active=0;
+test('Cancel all confirms once and cancels eligible devices concurrently',async()=>{
+  const context=batchFixture(),calls=[],server=structuredClone(context.state.deployments[0]);let confirmations=0,active=0,peak=0;
   context.confirm=()=>{confirmations++;return true;};
   context.api=async(path,options)=>{
-    assert.equal(++active,1);
+    active++;peak=Math.max(peak,active);
     const {device_id}=JSON.parse(options.body);calls.push(device_id);
     await Promise.resolve();active--;
-    const deployment=context.state.deployments[0];
-    return {...deployment,results:{...deployment.results,[device_id]:{status:'cancelling'}}};
+    server.results[device_id]={status:'cancelling'};server.revision=Number(server.revision||0)+1;
+    return structuredClone(server);
   };
   await vm.runInContext('cancelAllDeploymentUpdates(button)',context);
   assert.equal(confirmations,1);assert.deepEqual(calls,['one','two']);
+  assert.equal(peak,2);
   assert.equal(context.state.deployments[0].results.installing.status,'installing');
   assert.equal(context.state.deployments[0].results.one.status,'cancelling');
   assert.match(vm.runInContext('updateCancelAllBadge(state.deployments[0])',context),/disabled/);
@@ -116,20 +117,54 @@ test('a lost acknowledgement cannot trap Cancel all or replay a mutation; late a
   assert.equal(context.state.deployments[0].results.one.status,'cancelled');
   assert.equal(vm.runInContext("updateCancelError(state.deployments[0],'one')",context),'');
 });
-test('Cancel all rechecks fresh state before each target and suppresses concurrent submissions',async()=>{
-  const context=batchFixture(),calls=[];let resolve;
+test('Cancel all rechecks waiting targets and suppresses concurrent submissions',async()=>{
+  const context=batchFixture(),calls=[],finishes=new Map();
+  const deployment=context.state.deployments[0];
+  deployment.targets=['one','two','three','four','five'];
+  deployment.results=Object.fromEntries(deployment.targets.map(id=>[id,{status:'queued'}]));
+  const server=structuredClone(deployment);
   context.api=async(path,options)=>{
     const {device_id}=JSON.parse(options.body);calls.push(device_id);
-    await new Promise(done=>resolve=done);
-    const deployment=context.state.deployments[0];
-    return {...deployment,results:{...deployment.results,one:{status:'cancelling'},two:{status:'installing'}}};
+    await new Promise(done=>finishes.set(device_id,done));
+    server.revision=Number(server.revision||0)+1;
+    server.results[device_id]={status:'cancelling'};server.results.five={status:'installing'};
+    return structuredClone(server);
   };
   const first=vm.runInContext('cancelAllDeploymentUpdates(button)',context);
   assert.match(vm.runInContext('updateCancelAllBadge(state.deployments[0])',context),/disabled/);
   await vm.runInContext('cancelAllDeploymentUpdates(button)',context);
   context.deviceButton={dataset:{deployment:'deploy',device:'two'}};
   await vm.runInContext('cancelDeploymentUpdate(deviceButton)',context);
-  resolve();await first;assert.deepEqual(calls,['one']);
+  for(const finish of finishes.values())finish();
+  await first;assert.deepEqual(calls,['one','two','three','four']);
+});
+
+test('large batches use four workers and refill without waiting for the slowest device',async()=>{
+  const context=batchFixture(),calls=[],finishes=new Map();let active=0,peak=0;
+  const deployment=context.state.deployments[0];
+  deployment.targets=Array.from({length:10},(_,index)=>'device-'+index);
+  deployment.results=Object.fromEntries(deployment.targets.map(id=>[id,{status:'queued'}]));
+  const server=structuredClone(deployment);
+  context.api=async(path,options)=>{
+    const {device_id}=JSON.parse(options.body);calls.push(device_id);active++;peak=Math.max(peak,active);
+    await new Promise(done=>finishes.set(device_id,done));active--;
+    server.revision=Number(server.revision||0)+1;server.results[device_id]={status:'cancelled'};
+    return structuredClone(server);
+  };
+  const batch=vm.runInContext('cancelAllDeploymentUpdates(button)',context);
+  assert.equal(calls.length,4);assert.equal(active,4);
+  // Device 0 remains unresponsive, but a free worker starts device 4 immediately.
+  finishes.get('device-2')();for(let i=0;i<12;i++)await Promise.resolve();
+  assert.equal(calls.length,5);assert.equal(calls[4],'device-4');
+  assert.equal(context.state.deployments[0].results['device-2'].status,'cancelled');
+  assert.equal(context.state.deployments[0].results['device-0'].status,'queued');
+  for(let i=1;i<10;i++){
+    if(i===2)continue;
+    finishes.get('device-'+i)();for(let j=0;j<12;j++)await Promise.resolve();
+  }
+  finishes.get('device-0')();await batch;
+  assert.equal(peak,4);assert.equal(new Set(calls).size,10);assert.equal(calls.length,10);
+  assert.ok(Object.values(context.state.deployments[0].results).every(result=>result.status==='cancelled'));
 });
 test('declined confirmation and terminal-only jobs make no cancellation requests',async()=>{
   const context=batchFixture();context.confirm=()=>false;

@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.2.3 - 2026-10-10
+
+- Dispatch Cancel all through four independent workers instead of waiting for
+  each device sequentially. Refill available workers immediately and recheck
+  each waiting target before submission. Preserve per-device acknowledgements,
+  timeouts, late results and no-replay protection.
+
 ## 3.2.2 - 2026-10-10
 
 - Reject already-installed updates after a fresh device poll, before dispatching

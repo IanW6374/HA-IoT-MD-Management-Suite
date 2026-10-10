@@ -59,10 +59,16 @@ async function cancelAllDeploymentUpdates(button) {
   if(!targets.length||!confirm('Cancel all queued and staging updates in this job? Devices already installing will be left running.'))return;
   updateCancelAllPending.add(deployment_id);renderDeploymentStatus();
   try {
-    for(const id of targets) {
-      const current=state.deployments.find(item=>item.id===deployment_id);
-      if(current&&updateCancelEligible(current,id))await requestDeploymentCancellation(deployment_id,id);
-    }
+    // Keep status reads responsive without serializing the entire batch behind
+    // one slow device. Refill each worker independently as acknowledgements arrive.
+    let next=0;
+    const worker=async()=>{
+      while(next<targets.length){
+        const id=targets[next++],current=state.deployments.find(item=>item.id===deployment_id);
+        if(current&&updateCancelEligible(current,id))await requestDeploymentCancellation(deployment_id,id);
+      }
+    };
+    await Promise.all(Array.from({length:Math.min(4,targets.length)},worker));
   } finally {updateCancelAllPending.delete(deployment_id);renderDeploymentStatus();}
   refreshDeploymentProgress().catch(()=>{});
 }
