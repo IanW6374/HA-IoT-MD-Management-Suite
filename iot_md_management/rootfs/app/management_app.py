@@ -457,6 +457,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(202, CONTROLLER.apply_policy(request))
             elif path == '/api/deployments':
                 self._json(202, CONTROLLER.create_deployment(request))
+            elif path == '/api/deployments/cancel':
+                self._json(200, CONTROLLER.cancel_deployment_target(
+                    str(request.get('deployment_id', '')), str(request.get('device_id', ''))))
             elif path == '/api/profiles':
                 profile = STORE.save_profile(normalize_profile(request))
                 STORE.record_audit(
@@ -634,9 +637,9 @@ def poll_loop():
         time.sleep(cadence)
 
 
-def job_loop():
+def job_loop(poll_only=False):
     while True:
-        job = STORE.claim_job()
+        job = STORE.claim_job(poll_only=poll_only)
         if job is None:
             time.sleep(1)
             continue
@@ -767,8 +770,12 @@ def release_sync_loop():
 
 
 def main():
+    STORE.recover_poll_jobs()
     threading.Thread(target=poll_loop, daemon=True).start()
     threading.Thread(target=job_loop, daemon=True).start()
+    # Keep health collection independent of slow deployments and backups.
+    # Poll jobs are still coalesced and processed by one bounded worker.
+    threading.Thread(target=job_loop, args=(True,), daemon=True).start()
     threading.Thread(target=backup_schedule_loop, daemon=True).start()
     if RELEASE_SYNC_STATE['enabled']:
         threading.Thread(target=release_sync_loop, daemon=True).start()

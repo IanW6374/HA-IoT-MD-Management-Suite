@@ -87,6 +87,10 @@ _DEVICE_REQUEST_LOCKS = {}
 _DEVICE_REQUEST_LOCK = threading.Lock()
 
 
+class DeviceMutationRejected(ValueError):
+    """An explicit precondition/permission rejection, not an ambiguous I/O failure."""
+
+
 class DeviceClient:
     def __init__(self, record, timeout=10, sequence_provider=None, request_recorder=None):
         self.record = record
@@ -173,7 +177,8 @@ class DeviceClient:
                 detail = str(exc)
             if path == '/api/v3' and exc.code in (404, 410):
                 detail = 'Device API v3 required; update IoT-MD and Management together'
-            raise ValueError(bounded_text(detail, 256)) from None
+            error = DeviceMutationRejected if exc.code in (400, 403, 404, 405, 410) else ValueError
+            raise error(bounded_text(detail, 256)) from None
 
 
 class FleetController:
@@ -183,6 +188,12 @@ class FleetController:
         self.timeout = int(timeout)
         self.now = now or (lambda: int(time.time()))
         self.tls = dict(tls or {})
+        self._action_locks = {}
+        self._action_locks_guard = threading.Lock()
+
+    def _action_lock(self, identifier):
+        with self._action_locks_guard:
+            return self._action_locks.setdefault(identifier, threading.RLock())
 
     def _client(self, record, timeout=None):
         settings = dict(record)
@@ -442,10 +453,32 @@ class FleetController:
             if identifier not in deployment['targets']:
                 continue
             current = deployment['results'].get(identifier, {}).get('status', '')
+            if current == 'cancelling':
+                if self._update_installed(record, deployment.get('update') or {}):
+                    self.store.set_deployment_target(deployment['id'], identifier, 'complete',
+                        'Installed version confirmed; cancellation arrived after installation',
+                        progress={'completed': ['queued', 'inspect', 'core_write', 'core_verify',
+                            'application_download', 'application_verify', 'pair', 'install', 'complete'],
+                            'phase': 'complete'})
+                    continue
+                try:
+                    result = self._client(self.store.get_device(identifier, public=False)).request(
+                        '/api/v3/fleet/update-cancel')
+                    update = deployment.get('update') or {}
+                    if (result.get('status') == 'cancelled' and
+                            int(result.get('release_sequence', 0)) == int(update.get('release_sequence', 0)) and
+                            result.get('release_type') == update.get('release_type')):
+                        self.store.set_deployment_target(deployment['id'], identifier,
+                            'cancelled', 'Update cancelled; staged data discarded')
+                except Exception:
+                    # An unreadable/ambiguous acknowledgement must never be
+                    # presented as a successful cancellation or replayed write.
+                    pass
+                continue
             if current in ('queued', 'running'):
                 # Polling inventory is not proof that a queued profile ran.
                 continue
-            if current in ('complete', 'failed') or (
+            if current in ('complete', 'failed', 'cancelled') or (
                 current == 'staged' and deployment.get('activation') == 'stage'
             ):
                 continue
@@ -638,13 +671,59 @@ class FleetController:
         return deployment
 
     def execute_deployment_target(self, deployment_id, identifier):
+        with self._action_lock(identifier):
+            return self._execute_deployment_target(deployment_id, identifier)
+
+    def cancel_deployment_target(self, deployment_id, identifier):
+        with self._action_lock(identifier):
+            deployment = self.store.get_deployment(deployment_id)
+            if not deployment or identifier not in deployment['targets']:
+                raise ValueError('device is not part of this deployment')
+            update = deployment.get('update') or {}
+            if not update:
+                raise ValueError('only update deployments can be cancelled')
+            current = deployment['results'].get(identifier, {}).get('status', 'queued')
+            if current in ('complete', 'failed', 'cancelled'):
+                return deployment
+            if current == 'installing':
+                raise ValueError('Installation has begun; wait for confirmation before using rollback')
+            if current == 'queued':
+                # No device mutation has been submitted yet. Late worker claims
+                # see this terminal result and must not dispatch a policy.
+                return self.store.set_deployment_target(deployment_id, identifier,
+                    'cancelled', 'Cancelled before dispatch')
+            if current == 'cancelling':
+                return deployment
+            record = self.store.get_device(identifier, public=False)
+            client = self._client(record)
+            metadata = client.request('/api/v3')
+            if not metadata.get('capabilities', {}).get('update_cancellation'):
+                raise ValueError('This device application does not support safe cancellation; update IoT-MD first')
+            self.store.set_deployment_target(deployment_id, identifier, 'cancelling',
+                'Cancellation requested; awaiting device acknowledgement')
+            try:
+                result = client.request('/api/v3/fleet/update-cancel', 'POST', {
+                    'release_sequence': update['release_sequence'],
+                    'release_type': update['release_type'],
+                })
+            except DeviceMutationRejected as exc:
+                self.store.set_deployment_target(deployment_id, identifier, current,
+                    'Cancellation rejected: ' + str(exc), cancellation_refused=True)
+                raise
+            if result.get('status') not in ('cancelling', 'cancelled'):
+                raise ValueError('Device cancellation outcome is uncertain; refresh to reconcile, do not repeat the write')
+            return self.store.set_deployment_target(deployment_id, identifier,
+                result['status'], 'Update cancelled; staged data discarded' if
+                result['status'] == 'cancelled' else 'Waiting for staging to stop safely')
+
+    def _execute_deployment_target(self, deployment_id, identifier):
         deployment = self.store.get_deployment(deployment_id)
         if not deployment:
             raise ValueError('deployment does not exist')
         if identifier not in deployment['targets']:
             raise ValueError('device is not part of this deployment')
         current = deployment['results'].get(identifier, {})
-        if current.get('status') in ('complete', 'failed') or (
+        if current.get('status') in ('complete', 'failed', 'cancelled') or (
             current.get('status') == 'staged' and deployment['activation'] == 'stage'
         ):
             # Old retry jobs must not resurrect an action from history.
@@ -660,7 +739,7 @@ class FleetController:
                 if other['id'] == deployment_id or identifier not in other['targets']:
                     continue
                 status = other['results'].get(identifier, {}).get('status', 'queued')
-                if status not in ('queued', 'complete', 'failed') and not (
+                if status not in ('queued', 'complete', 'failed', 'cancelled') and not (
                     status == 'staged' and other['activation'] == 'stage'
                 ):
                     raise ValueError('Device already has an in-flight deployment: ' + other['id'])

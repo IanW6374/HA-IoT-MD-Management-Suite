@@ -6,6 +6,11 @@ from pathlib import Path
 
 def compose(html):
     assets = Path(__file__).with_name('assets')
+    html = html.replace('${flowFor(deployment)}${deviceResults}</article>',
+                        '${flowFor(deployment)}${deviceResults}${updateCancelControls(deployment)}</article>')
+    html = html.replace("['complete','failed','partial','staged']", "['complete','failed','partial','staged','cancelled']")
+    html = html.replace("warn=['queued'", "warn=['cancelling','cancelled','queued'")
+    html = html.replace('const activePage=', (assets / 'update_cancel.js').read_text() + '\nconst activePage=', 1)
     # Groups and select-all are inside the device picker, not separate modes.
     html = re.sub(
         r'<div class="scope-tabs"><label><input type="radio" name="(?:backup_)?target_scope".*?</div>',
@@ -30,6 +35,7 @@ def compose(html):
                         assets.joinpath('logs_views.js').read_text() + '\n' +
                         assets.joinpath('form_requirements.js').read_text() + '\n' +
                         assets.joinpath('target_picker.js').read_text() + '\nconst activePage=', 1)
+    html = html.replace('const activePage=', assets.joinpath('device_status.js').read_text() + '\nconst activePage=', 1)
     html = html.replace('</style>', assets.joinpath('fleet_views.css').read_text() +
                         assets.joinpath('form_controls.css').read_text() + '</style>', 1)
     html = html.replace("console.error('Profile editor initialization failed',error)",
@@ -80,6 +86,10 @@ def compose(html):
     html = html.replace('>New profile</a>', '>Add profile</a>')
     html = html.replace('<h1 id="actions-title">New action</h1>', '<h1 id="actions-title">Create action</h1>')
     html = html.replace("names.map(name=>api('api/'+name))", "names.map(name=>api(auditEndpoint(name)))")
+    html = html.replace("names.map(name=>api(auditEndpoint(name)))", "names.map(name=>name==='devices'?refreshDeviceStatus():api(auditEndpoint(name)))")
+    html = html.replace('if(values.devices)state.devices=values.devices.devices||[];', '')
+    html = html.replace("api('api/backups'),api('api/devices')", "api('api/backups'),refreshDeviceStatus()")
+    html = html.replace('state.devices=devices.devices;state.backups=', 'state.backups=')
     html = html.replace('async function refreshAll(){const names=', "async function refreshAll(){const requestedAuditQuery=document.getElementById('audit-search')?.value||'';const names=")
     for source in ('audit', 'events'):
         html = html.replace('if(values.' + source + ')state.' + source,

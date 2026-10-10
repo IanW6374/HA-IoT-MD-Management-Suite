@@ -445,7 +445,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertIn("deploymentSection?.classList.toggle('hidden',!active.length)", self.module.HTML)
         self.assertIn("emptySection?.classList.toggle('hidden',!!active.length||!!backupCount)", self.module.HTML)
         self.assertNotIn('No deployments are currently in flight.', self.module.HTML)
-        self.assertIn("const terminal=new Set(['complete','failed','partial','staged'])", self.module.HTML)
+        self.assertIn("const terminal=new Set(['complete','failed','partial','staged','cancelled'])", self.module.HTML)
         self.assertIn('active.map(activeDeploymentCard)', self.module.HTML)
         self.assertIn('html:deploymentHistoryItem(item)', self.module.HTML)
         self.assertIn('class="timeline"', self.module.HTML)
@@ -548,7 +548,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
             self.module.HTML,
         )
         self.assertIn(
-            "Promise.all([api('api/backups'),api('api/devices')])",
+            "Promise.all([api('api/backups'),refreshDeviceStatus()])",
             self.module.HTML,
         )
         self.assertIn('Promise.allSettled', self.module.HTML)
@@ -2179,6 +2179,109 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         store.complete_job(first['id'])
         fresh = store.enqueue_job('poll', 'one', idempotency_key='slot-9')
         self.assertNotEqual(fresh['id'], first['id'])
+
+    def test_health_worker_bypasses_action_jobs_without_replaying_running_mutations(self):
+        store = self.module.FleetStore(Path(self.temp.name) / 'separate-workers.db')
+        self.addCleanup(store.close)
+        backup = store.enqueue_job('backup', 'one', idempotency_key='backup')
+        poll = store.enqueue_job('poll', 'two', idempotency_key='poll')
+        self.assertEqual(store.claim_job(poll_only=False)['id'], backup['id'])
+        self.assertEqual(store.claim_job(poll_only=True)['id'], poll['id'])
+        self.assertIsNone(store.claim_job(poll_only=False))
+        self.assertIsNone(store.claim_job(poll_only=True))
+        self.assertEqual(store.recover_poll_jobs(), 1)
+        self.assertEqual(store.get_job(backup['id'])['status'], 'running')
+        self.assertEqual(store.get_job(poll['id'])['status'], 'queued')
+        self.assertEqual(store.enqueue_job('poll', 'two', idempotency_key='next-poll')['id'], poll['id'])
+        self.assertEqual(store.claim_job(poll_only=True)['id'], poll['id'])
+        self.assertEqual(store.recover_poll_jobs(), 1)
+        store.claim_job(poll_only=True)
+        store.complete_job(poll['id'])
+        self.assertEqual(store.recover_poll_jobs(), 0)
+        self.assertEqual(store.get_job(poll['id'])['status'], 'complete')
+
+    def test_live_health_refresh_is_independent_and_resumes_when_tab_is_visible(self):
+        html = self.module.HTML
+        self.assertIn("name==='devices'?refreshDeviceStatus():api(auditEndpoint(name))", html)
+        self.assertNotIn('if(values.devices)state.devices=values.devices.devices||[]', html)
+        self.assertIn("document.addEventListener('visibilitychange', refreshVisibleDeviceStatus)", html)
+        self.assertIn("window.addEventListener('pageshow', refreshVisibleDeviceStatus)", html)
+        self.assertIn("cache:'no-store'", html)
+        self.assertIn('controller.abort(),20000', html)
+
+    def cancellation_fixture(self, suffix):
+        from fleet_service import FleetController
+        store = self.module.FleetStore(Path(self.temp.name) / ('cancel-' + suffix + '.db'))
+        self.addCleanup(store.close)
+        store.register({'id': 'one', 'host': 'one.local', 'ca_path': '/ssl/ca.pem',
+                        'cert_path': '/ssl/client.pem', 'key_path': '/ssl/key.pem'})
+        controller = FleetController(store, mock.Mock())
+        request = {'activation': 'now', 'targets': ['one'], 'update': {
+            'release_sequence': 2816, 'release_type': 'universal'}}
+        deployment = controller.create_deployment(request)
+        controller._client = mock.Mock()
+        controller.apply_policy = mock.Mock()
+        return store, controller, deployment, request
+
+    def test_cancel_queued_deployment_never_dispatches_and_allows_new_action(self):
+        store, controller, deployment, request = self.cancellation_fixture('queued')
+        result = controller.cancel_deployment_target(deployment['id'], 'one')
+        self.assertEqual(result['status'], 'cancelled')
+        controller.execute_deployment_target(deployment['id'], 'one')
+        controller.apply_policy.assert_not_called()
+        controller._client.assert_not_called()
+        self.assertNotEqual(controller.create_deployment(request)['id'], deployment['id'])
+
+    def test_cancel_running_update_waits_for_matching_device_ack_and_retains_progress(self):
+        store, controller, deployment, request = self.cancellation_fixture('running')
+        store.set_deployment_target(deployment['id'], 'one', 'staging',
+            progress={'phase': 'core_write', 'completed': ['queued', 'inspect']})
+        client = mock.Mock()
+        client.request.side_effect = [
+            {'capabilities': {'update_cancellation': True}}, {'status': 'cancelling'},
+            {'status': 'cancelled', 'release_sequence': 9999, 'release_type': 'universal'},
+            {'status': 'cancelled', 'release_sequence': 2816, 'release_type': 'universal'}]
+        controller._client.return_value = client
+        self.assertEqual(controller.cancel_deployment_target(deployment['id'], 'one')['results']['one']['status'], 'cancelling')
+        store.set_deployment_target(deployment['id'], 'one', 'installing', 'Late stale snapshot')
+        self.assertEqual(store.get_deployment(deployment['id'])['results']['one']['status'], 'cancelling')
+        controller._reconcile_deployments('one', {})
+        self.assertEqual(store.get_deployment(deployment['id'])['results']['one']['status'], 'cancelling')
+        controller._reconcile_deployments('one', {})
+        result = store.get_deployment(deployment['id'])
+        self.assertEqual(result['status'], 'cancelled')
+        self.assertIn('inspect', result['results']['one']['update_milestones'])
+        self.assertEqual(sum(call.args[1:2] == ('POST',) for call in client.request.call_args_list), 1)
+
+    def test_uncertain_cancel_is_not_replayed_and_explicit_rejection_restores_state(self):
+        from fleet_service import DeviceMutationRejected
+        for suffix, error, expected in [('uncertain', TimeoutError('lost acknowledgement'), 'cancelling'),
+                                         ('rejected', DeviceMutationRejected('Installation has begun'), 'staging')]:
+            with self.subTest(suffix=suffix):
+                store, controller, deployment, request = self.cancellation_fixture(suffix)
+                store.set_deployment_target(deployment['id'], 'one', 'staging')
+                client = mock.Mock()
+                client.request.side_effect = [{'capabilities': {'update_cancellation': True}}, error]
+                controller._client.return_value = client
+                with self.assertRaises(type(error)):
+                    controller.cancel_deployment_target(deployment['id'], 'one')
+                self.assertEqual(store.get_deployment(deployment['id'])['results']['one']['status'], expected)
+                if expected == 'cancelling':
+                    controller.cancel_deployment_target(deployment['id'], 'one')
+                    self.assertEqual(client.request.call_count, 2)
+
+    def test_cancellation_does_not_claim_success_for_an_installing_or_unsupported_device(self):
+        store, controller, deployment, request = self.cancellation_fixture('unsafe')
+        store.set_deployment_target(deployment['id'], 'one', 'installing')
+        with self.assertRaisesRegex(ValueError, 'Installation has begun'):
+            controller.cancel_deployment_target(deployment['id'], 'one')
+        controller._client.assert_not_called()
+        store, controller, deployment, request = self.cancellation_fixture('unsupported')
+        store.set_deployment_target(deployment['id'], 'one', 'checking')
+        controller._client.return_value.request.return_value = {'capabilities': {}}
+        with self.assertRaisesRegex(ValueError, 'does not support safe cancellation'):
+            controller.cancel_deployment_target(deployment['id'], 'one')
+        self.assertEqual(store.get_deployment(deployment['id'])['results']['one']['status'], 'checking')
 
     def test_install_now_is_recorded_as_all_day_admin_override(self):
         from fleet_service import FleetController

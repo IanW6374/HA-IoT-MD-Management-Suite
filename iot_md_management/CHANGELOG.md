@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Run automatic device health checks independently of deployments/backups.
+  Recover orphaned read-only poll jobs on startup without replaying mutations.
+- Update device rows as soon as their data arrives, independently of unrelated
+  workspace requests. Bound/cache-disable reads and refresh on return to a tab;
+  preserve expanded details, focus and unsaved device edits.
+- Add per-device update cancellation to In-Flight actions. Cancel undispatched
+  jobs locally, require device acknowledgement for running staging, retain
+  cancelled history and completed milestones, and refuse unsafe installation
+  cancellation. Reconcile uncertain acknowledgements without replaying writes.
+
 ## 3.1.0
 
 - Use the device's advertised HTTPS hostname for Open portal links and tooltips.

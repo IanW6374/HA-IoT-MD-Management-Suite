@@ -663,7 +663,7 @@ class FleetRepository:
                 for target in set(targets).intersection(existing['targets']):
                     result = existing['results'].get(target, {})
                     status = result.get('status', 'queued')
-                    if status not in ('complete', 'failed') and not (
+                    if status not in ('complete', 'failed', 'cancelled') and not (
                         status == 'staged' and existing['activation'] == 'stage'
                     ):
                         raise ValueError(target + ' already has an in-flight deployment: ' + existing['id'])
@@ -706,8 +706,9 @@ class FleetRepository:
             ''', (limit,)).fetchall()
         return [self._deployment(row) for row in rows]
 
-    def set_deployment_target(self, identifier, device_id, status, detail='', progress=None):
-        terminal = {'complete', 'failed', 'staged'}
+    def set_deployment_target(self, identifier, device_id, status, detail='', progress=None,
+                              cancellation_refused=False):
+        terminal = {'complete', 'failed', 'staged', 'cancelled'}
         milestone_ranks = {
             'queued': 0, 'active': 0, 'running': 0,
             'checking': 1, 'staging': 1, 'staged': 2,
@@ -726,8 +727,12 @@ class FleetRepository:
             ) or 0)
             # A late policy snapshot must not rewind an observed restart/stage.
             # Failure still remains terminal and never gains successful milestones.
-            if previous in ('complete', 'failed') or (
+            if previous in ('complete', 'failed', 'cancelled') or (
                 status in milestone_ranks and milestone_ranks[status] < previous_rank
+            ) or (
+                previous == 'cancelling' and status not in ('cancelled', 'cancelling') and
+                not cancellation_refused and not (status == 'complete' and
+                    (progress or {}).get('phase') == 'complete')
             ):
                 return deployment
             milestone_rank = max(
@@ -758,6 +763,10 @@ class FleetRepository:
                       for target in deployment['targets']]
             if any(value not in terminal for value in states):
                 overall = 'active'
+            elif all(value == 'cancelled' for value in states):
+                overall = 'cancelled'
+            elif any(value == 'cancelled' for value in states):
+                overall = 'partial'
             elif all(value == 'failed' for value in states):
                 overall = 'failed'
             elif any(value == 'failed' for value in states):
@@ -1053,11 +1062,23 @@ class FleetRepository:
             rows = self.connection.execute(query, tuple(values)).fetchall()
         return [self._job(row) for row in rows]
 
-    def claim_job(self):
+    def recover_poll_jobs(self):
+        """Requeue read-only polls orphaned by a previous process; never replay actions."""
+        with self.lock, self.connection:
+            return self.connection.execute('''
+                UPDATE jobs SET status='queued',not_before=?,updated_at=?
+                WHERE kind='poll' AND status='running'
+            ''', (self.now(), self.now())).rowcount
+
+    def claim_job(self, poll_only=None):
         now = self.now()
+        kind_filter = " AND kind='poll'" if poll_only is True else (
+            " AND kind<>'poll'" if poll_only is False else ''
+        )
         with self.lock, self.connection:
             row = self.connection.execute('''
                 SELECT * FROM jobs WHERE status='queued' AND not_before<=?
+            ''' + kind_filter + '''
                 ORDER BY not_before,id LIMIT 1
             ''', (now,)).fetchone()
             if row is None:
@@ -1105,7 +1126,7 @@ class FleetRepository:
                 deployment = self.get_deployment(job['target'])
                 target = job['payload'].get('device_id', '')
                 if deployment and target in deployment['targets'] and (
-                    deployment['results'].get(target, {}).get('status') not in ('complete', 'failed', 'staged')
+                    deployment['results'].get(target, {}).get('status') not in ('complete', 'failed', 'staged', 'cancelled', 'cancelling')
                 ):
                     self.set_deployment_target(job['target'], target, 'failed', str(detail))
 

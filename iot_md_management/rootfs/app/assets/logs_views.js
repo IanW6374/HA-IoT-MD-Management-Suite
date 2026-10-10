@@ -14,7 +14,7 @@ function renderActionHistory(){
   const requested=new URLSearchParams(location.search).get('history'),filter=['deployments','backups','seed'].includes(requested)?requested:control.value,query=document.getElementById('action-history-search').value;
   control.value=filter;
   const records=[],matches=values=>matchesCatalogSearch(values,query);
-  if(['all','deployments'].includes(filter))for(const item of state.deployments.filter(value=>['complete','failed','partial','staged'].includes(value.status))){
+  if(['all','deployments'].includes(filter))for(const item of state.deployments.filter(value=>['complete','failed','partial','staged','cancelled'].includes(value.status))){
     const devices=item.targets.map(id=>{const device=state.devices.find(value=>value.id===id);return [id,device?.host,device?.name,device?.description,item.results?.[id]?.status,item.results?.[id]?.detail].join(' ')});
     if(matches([item.id,item.update?.version,item.update?.release_type,item.profile_name,item.status,item.activation,...devices]))records.push({time:Number(item.created_at)||0,html:deploymentHistoryItem(item)});
   }
