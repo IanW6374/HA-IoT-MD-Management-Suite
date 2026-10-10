@@ -69,13 +69,13 @@ class FleetAddonTests(unittest.TestCase):
         self.assertNotIn('__AUTO_PROMOTE_ALPHA__', settings)
 
     def test_generated_portal_javascript_parses(self):
-        runtime = shutil.which('node') or shutil.which('qjs')
+        runtime = shutil.which('node')
         if not runtime:
-            self.skipTest('Node.js or QuickJS is required for JavaScript syntax validation')
+            self.skipTest('Node.js is required for JavaScript syntax validation')
         script = self.module.HTML.split('<script>', 1)[1].split('</script>', 1)[0]
         check = subprocess.run(
-            [runtime, '-e', 'new Function(' + json.dumps(script) + ');'],
-            capture_output=True, text=True,
+            [runtime, '-e', "new Function(require('fs').readFileSync(0, 'utf8'));"],
+            input=script, capture_output=True, text=True,
         )
         self.assertEqual(check.returncode, 0, check.stderr)
 
