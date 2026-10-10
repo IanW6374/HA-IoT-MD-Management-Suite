@@ -2,10 +2,17 @@ function logView(){return new URLSearchParams(location.search).get('view')==='au
 function logStatusDot(status,description=''){
   const value=String(status||'observed'),normalized=value.toLowerCase();
   const tone=['failed','partial','error','interrupted','rolled_back','unavailable','rejected','denied','startup_failed'].includes(normalized)?'bad':
-    ['queued','active','running','checking','staging','scheduled','installing','staged'].includes(normalized)?'warn':
+    ['queued','active','running','checking','staging','scheduled','installing','staged','cancelled','cancelling','partly cancelled'].includes(normalized)?'warn':
     ['complete','completed','success','healthy','confirmed','recovery prepared','image verified'].includes(normalized)?'good':'neutral';
   const label=description?`${value.replaceAll('_',' ')} — ${description}`:value.replaceAll('_',' ');
   return `<span class="event-dot log-dot ${tone}" role="img" tabindex="0" aria-label="${esc(label)}" data-tooltip="${esc(label)}" title="${esc(label)}"></span>`;
+}
+function deploymentOutcomeDot(deployment){
+  const counts=new Map();
+  for(const id of deployment.targets){const status=deployment.results[id]?.status||'queued';counts.set(status,(counts.get(status)||0)+1);}
+  const description=[...counts].map(([status,count])=>`${count} ${status}`).join(', ');
+  const cancelled=counts.has('cancelled'), failed=counts.has('failed');
+  return logStatusDot(cancelled&&!failed?(counts.size===1?'cancelled':'partly cancelled'):deployment.status,description);
 }
 function timeline(items){return items.map(item=>`<article class="event"><time class="event-time">${esc(when(item.time))}</time>${logStatusDot(item.status)}<div><strong>${esc(item.title)}</strong><p>${esc([item.subject,item.target,item.detail].filter(Boolean).join(' · '))}</p></div></article>`).join('')||'<p class="muted">No matching log entries.</p>'}
 function renderActionHistory(){

@@ -406,6 +406,29 @@ class FleetController:
             return firmware >= sequence
         return release_type == 'universal' and application >= sequence and firmware >= sequence
 
+    def _deployment_update_completed(self, deployment, identifier, record):
+        update = deployment.get('update') or {}
+        if not self._update_installed(record, update):
+            return False
+        result = deployment['results'].get(identifier, {})
+        dispatch = result.get('dispatch')
+        if dispatch:
+            # An inventory match is only completion evidence after this job
+            # dispatched from a lower installed sequence, not a previous job.
+            baseline = {'inventory': {'device': dispatch['baseline']}}
+            if self._update_installed(baseline, update):
+                return False
+            fleet = record.get('fleet') or {}
+            if fleet.get('rollout_paused') or fleet.get('command_chain_failed'):
+                return False
+            commands = (fleet.get('policy') or {}).get('commands') or []
+            return any(command.get('id') in dispatch['command_ids'] and
+                int(command.get('release_sequence', 0)) == int(update['release_sequence']) and
+                command.get('release_type') == update['release_type'] for command in commands)
+        # Existing in-flight records without dispatch evidence need an observed
+        # installation boundary. Never promote a mere compatibility check.
+        return int(result.get('milestone_rank', 0)) >= 3
+
     @staticmethod
     def _installation_started(record, update, progress):
         """Prefer a matching live trial over commands left pending across reset."""
@@ -454,7 +477,7 @@ class FleetController:
                 continue
             current = deployment['results'].get(identifier, {}).get('status', '')
             if current == 'cancelling':
-                if self._update_installed(record, deployment.get('update') or {}):
+                if self._deployment_update_completed(deployment, identifier, record):
                     self.store.set_deployment_target(deployment['id'], identifier, 'complete',
                         'Installed version confirmed; cancellation arrived after installation',
                         progress={'completed': ['queued', 'inspect', 'core_write', 'core_verify',
@@ -493,27 +516,21 @@ class FleetController:
                     deployment['id'], identifier, 'complete', 'Profile applied'
                 )
                 continue
-            if self._update_installed(record, update):
-                self.store.set_deployment_target(
-                    deployment['id'], identifier, 'complete',
-                    (update.get('version') or 'Update') + ' installed',
-                    progress={'completed': ['queued', 'inspect', 'core_write',
-                        'core_verify', 'application_download', 'application_verify',
-                        'pair', 'install', 'complete'], 'phase': 'complete'}
-                )
-                continue
             sequence = int(update.get('release_sequence', 0))
             release_type = update.get('release_type', '')
+            command_ids = (deployment['results'].get(identifier, {}).get('dispatch') or {}).get('command_ids')
             policy_commands = (fleet.get('policy') or {}).get('commands') or []
             matching = [
                 command for command in policy_commands
                 if int(command.get('release_sequence', 0)) == sequence and
+                (command_ids is None or command.get('id') in command_ids) and
                 (not command.get('release_type') or
                  command.get('release_type') == release_type)
             ]
             pending = [
                 command for command in (fleet.get('pending_commands') or [])
                 if int(command.get('release_sequence', 0)) == sequence and
+                (command_ids is None or command.get('id') in command_ids) and
                 (not command.get('release_type') or
                  command.get('release_type') == release_type)
             ]
@@ -525,6 +542,15 @@ class FleetController:
                 )
                 self.store.set_deployment_target(
                     deployment['id'], identifier, 'failed', detail, progress=progress
+                )
+                continue
+            if self._deployment_update_completed(deployment, identifier, record):
+                self.store.set_deployment_target(
+                    deployment['id'], identifier, 'complete',
+                    (update.get('version') or 'Update') + ' installed',
+                    progress={'completed': ['queued', 'inspect', 'core_write',
+                        'core_verify', 'application_download', 'application_verify',
+                        'pair', 'install', 'complete'], 'phase': 'complete'}
                 )
                 continue
             if self._installation_started(record, update, progress):
@@ -796,10 +822,6 @@ class FleetController:
             actions = ['check-update', 'download-update']
             if activation != 'stage':
                 actions.append('activate-update')
-            self.store.set_deployment_target(
-                deployment_id, identifier, 'checking',
-                'Deployment accepted; checking update compatibility'
-            )
             self.apply_policy({
                 'device_id': identifier, 'channel': update.get('channel', 'alpha'),
                 'weekdays': window['weekdays'],
@@ -812,7 +834,7 @@ class FleetController:
                     'release_sequence': update['release_sequence'],
                     'release_type': update['release_type'],
                 } for action in actions],
-            })
+            }, deployment_id=deployment_id)
             return self.store.get_deployment(deployment_id)['results'][identifier]
         except Exception as exc:
             self.store.set_deployment_target(
@@ -865,7 +887,7 @@ class FleetController:
         self.poll_device(identifier)
         return result
 
-    def apply_policy(self, request):
+    def apply_policy(self, request, deployment_id=None):
         now = self.now()
         start_minute, duration_minutes = maintenance_window(request)
         target = bounded_text(request.get('device_id'), 64)
@@ -880,6 +902,11 @@ class FleetController:
                 'Cannot verify the device Management signing identity: ' +
                 bounded_text(record.get('last_error'), 192)
             )
+        if deployment_id is not None:
+            deployment = self.store.get_deployment(deployment_id)
+            update = deployment.get('update') or {}
+            if self._update_installed(record, update):
+                raise ValueError('No newer compatible release: the selected update is already installed')
         device_target = str(
             (record.get('inventory') or {}).get('device', {}).get('device_id') or
             (record.get('fleet') or {}).get('device_id') or ''
@@ -933,6 +960,14 @@ class FleetController:
                 '', 'application', 'firmware', 'universal')
                for command in commands):
             raise ValueError('deployment update type is invalid')
+        if deployment_id is not None:
+            device = (record.get('inventory') or {}).get('device') or {}
+            self.store.set_deployment_target(deployment_id, target, 'checking',
+                'Deployment accepted; checking update compatibility', dispatch={
+                    'baseline': {name: int(device.get(name, 0) or 0) for name in
+                        ('release_sequence', 'firmware_release_sequence')},
+                    'command_ids': [command['id'] for command in commands],
+                })
         policy = {
             'format_version': 2,
             'target_board': 'esp32-s3',

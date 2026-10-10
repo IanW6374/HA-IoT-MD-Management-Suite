@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 3.2.1', addon)
+        self.assertIn('version: 3.2.2', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -453,7 +453,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertIn('device results</summary>', self.module.HTML)
         self.assertIn('function conciseDeploymentDetail(detail,version)', self.module.HTML)
         self.assertIn('function refreshDeploymentProgress()', self.module.HTML)
-        self.assertIn("if(activePage==='actions')refreshDeploymentProgress()", self.module.HTML)
+        self.assertIn("if(activePage==='actions')refreshVisibleDeploymentStatus()", self.module.HTML)
         self.assertNotIn('<p>${esc(deployment.id)}', self.module.HTML)
         self.assertNotIn('${statusBadge(firstResult.status)}', self.module.HTML)
 
@@ -1921,7 +1921,11 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
             'fleet': {'device_id': 'immutable-1'},
         }, {}, {'cursor': 0, 'events': []})
         controller = FleetController(store, mock.Mock())
-        controller.apply_policy = mock.Mock(return_value={'accepted': True})
+        def accept_policy(request, deployment_id=None):
+            store.set_deployment_target(deployment_id, request['device_id'],
+                'checking', 'Deployment accepted; checking update compatibility')
+            return {'accepted': True}
+        controller.apply_policy = mock.Mock(side_effect=accept_policy)
         deployment = controller.create_deployment({
             'target_scope': 'devices', 'targets': ['device-1'],
             'activation': 'schedule',
@@ -2103,6 +2107,9 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         command = {'id': 'download', 'action': 'download-update',
                    'release_type': 'universal', 'release_sequence': 2804}
         store.set_deployment_target(deployment['id'], 'device-1', 'checking')
+        store.set_deployment_target(deployment['id'], 'device-1', 'checking', dispatch={
+            'baseline': {'release_sequence': 2803, 'firmware_release_sequence': 2803},
+            'command_ids': ['download']})
         record = {'inventory': {'device': {'release_sequence': 2803,
             'firmware_release_sequence': 2803, 'update_progress': {
                 'release_sequence': 2804, 'type': 'universal',
@@ -2136,7 +2143,11 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         controller = FleetController(store, mock.Mock())
         for target in deployment['targets']:
             store.set_deployment_target(deployment['id'], target, 'checking')
-        command = {'action': 'check-update', **update}
+        command = {'id': 'check', 'action': 'check-update', **update}
+        for target in deployment['targets']:
+            store.set_deployment_target(deployment['id'], target, 'checking', dispatch={
+                'baseline': {'release_sequence': 2813, 'firmware_release_sequence': 2813},
+                'command_ids': ['check']})
         record = {'inventory': {'device': {
             'release_sequence': 2814, 'firmware_release_sequence': 2814,
             'update_progress': {'application_status': 'trial',
@@ -2222,6 +2233,142 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         controller._client = mock.Mock()
         controller.apply_policy = mock.Mock()
         return store, controller, deployment, request
+
+    def test_same_version_is_rejected_after_a_fresh_poll_before_policy_dispatch(self):
+        from fleet_service import FleetController
+        for release_type in ('application', 'firmware', 'universal'):
+            with self.subTest(release_type=release_type):
+                store, _, deployment, _ = self.cancellation_fixture('same-' + release_type)
+                store.record_poll('one', {'device': {'device_id': 'immutable-one',
+                    'release_sequence': 2815, 'firmware_release_sequence': 2815}},
+                    {}, {'events': [], 'cursor': 0})
+                signer = mock.Mock()
+                signer.fingerprint.return_value = ''
+                controller = FleetController(store, signer)
+                controller._client = mock.Mock()
+                # The cached inventory predates another successful installation.
+                def fresh_poll(identifier):
+                    store.record_poll(identifier, {'device': {'device_id': 'immutable-one',
+                        'release_sequence': 2816, 'firmware_release_sequence': 2816}},
+                        {}, {'events': [], 'cursor': 0})
+                    controller._reconcile_deployments(identifier, store.get_device(identifier))
+                controller.poll_device = mock.Mock(side_effect=fresh_poll)
+                # Exercise the selected component, including a full universal update.
+                if release_type != 'universal':
+                    store.set_deployment_target(deployment['id'], 'one', 'cancelled')
+                    deployment = controller.create_deployment({'activation': 'now',
+                        'targets': ['one'], 'update': {'release_sequence': 2816,
+                            'release_type': release_type}})
+                with self.assertRaisesRegex(ValueError, 'No newer compatible release'):
+                    controller.execute_deployment_target(deployment['id'], 'one')
+                saved = store.get_deployment(deployment['id'])
+                self.assertEqual(saved['results']['one']['status'], 'failed')
+                self.assertNotIn('complete', saved['results']['one']['update_milestones'])
+                controller._client.assert_not_called()
+                signer.sign.assert_not_called()
+                controller.execute_deployment_target(deployment['id'], 'one')
+                controller._client.assert_not_called()
+
+    def test_job_dispatch_evidence_survives_restart_and_confirms_a_fast_install(self):
+        from fleet_service import FleetController
+        store, _, deployment, _ = self.cancellation_fixture('dispatch')
+        inventory = {'device': {'device_id': 'immutable-one',
+            'release_sequence': 2815, 'firmware_release_sequence': 2815}}
+        store.record_poll('one', inventory, {}, {'events': [], 'cursor': 0})
+        signer = mock.Mock()
+        signer.fingerprint.return_value = ''
+        signer.sign.side_effect = lambda policy: policy
+        controller = FleetController(store, signer)
+        client = mock.Mock()
+        client.request.return_value = {'accepted': True}
+        controller._client = mock.Mock(return_value=client)
+        controller.poll_device = mock.Mock(return_value=store.get_device('one'))
+        controller.execute_deployment_target(deployment['id'], 'one')
+        saved = store.get_deployment(deployment['id'])
+        dispatch = saved['results']['one']['dispatch']
+        sent = client.request.call_args.args[2]
+        self.assertEqual(dispatch['baseline'], {'release_sequence': 2815,
+            'firmware_release_sequence': 2815})
+        self.assertEqual(dispatch['command_ids'], [command['id'] for command in sent['commands']])
+        self.assertEqual(saved['results']['one']['status'], 'checking')
+        # One-second granularity must not lose the ordering of separate writes.
+        revision = saved['revision']
+        store.set_deployment_target(deployment['id'], 'one', 'staging')
+        self.assertGreater(store.get_deployment(deployment['id'])['revision'], revision)
+        path = Path(self.temp.name) / 'cancel-dispatch.db'
+        reopened = self.module.FleetStore(path)
+        self.addCleanup(reopened.close)
+        persisted = reopened.get_deployment(deployment['id'])
+        self.assertEqual(persisted['results']['one']['dispatch'], dispatch)
+        self.assertEqual(persisted['revision'], store.get_deployment(deployment['id'])['revision'])
+        record = {'inventory': {'device': {'release_sequence': 2816,
+            'firmware_release_sequence': 2816}}, 'fleet': {'policy': {'commands': sent['commands']}}}
+        # A fast restart can finish between polls, without an observed trial.
+        controller._reconcile_deployments('one', record)
+        self.assertEqual(store.get_deployment(deployment['id'])['results']['one']['status'], 'complete')
+
+    def test_matching_failed_command_chain_wins_over_an_inventory_version_match(self):
+        store, controller, deployment, _ = self.cancellation_fixture('failed-version')
+        store.set_deployment_target(deployment['id'], 'one', 'checking', dispatch={
+            'baseline': {'release_sequence': 2815, 'firmware_release_sequence': 2815},
+            'command_ids': ['this-job']})
+        record = {'inventory': {'device': {'release_sequence': 2816,
+            'firmware_release_sequence': 2816}}, 'fleet': {
+                'policy': {'commands': [{'id': 'this-job', 'action': 'check-update',
+                    'release_sequence': 2816, 'release_type': 'universal'}]},
+                'command_chain_failed': True, 'last_result': {'detail': 'No newer compatible release'}}}
+        controller._reconcile_deployments('one', record)
+        saved = store.get_deployment(deployment['id'])['results']['one']
+        self.assertEqual(saved['status'], 'failed')
+        self.assertEqual(saved['detail'], 'No newer compatible release')
+
+    def test_another_jobs_commands_cannot_fail_or_complete_this_job(self):
+        store, controller, deployment, _ = self.cancellation_fixture('unrelated-version')
+        store.set_deployment_target(deployment['id'], 'one', 'checking', dispatch={
+            'baseline': {'release_sequence': 2815, 'firmware_release_sequence': 2815},
+            'command_ids': ['this-job']})
+        record = {'inventory': {'device': {'release_sequence': 2816,
+            'firmware_release_sequence': 2816}}, 'fleet': {
+                'policy': {'commands': [{'id': 'another-job', 'action': 'check-update',
+                    'release_sequence': 2816, 'release_type': 'universal'}]},
+                'command_chain_failed': True, 'last_result': {'detail': 'Unrelated failure'}}}
+        controller._reconcile_deployments('one', record)
+        self.assertEqual(store.get_deployment(deployment['id'])['results']['one']['status'], 'checking')
+
+    def test_failed_update_cannot_become_installed_while_cancellation_is_uncertain(self):
+        store, controller, deployment, _ = self.cancellation_fixture('failed-cancelling')
+        store.set_deployment_target(deployment['id'], 'one', 'checking', dispatch={
+            'baseline': {'release_sequence': 2815, 'firmware_release_sequence': 2815},
+            'command_ids': ['this-job']})
+        store.set_deployment_target(deployment['id'], 'one', 'cancelling')
+        controller._client.return_value.request.return_value = {'status': 'cancelling'}
+        record = {'inventory': {'device': {'release_sequence': 2816,
+            'firmware_release_sequence': 2816}}, 'fleet': {
+                'policy': {'commands': [{'id': 'this-job', 'action': 'check-update',
+                    'release_sequence': 2816, 'release_type': 'universal'}]},
+                'command_chain_failed': True, 'last_result': {'detail': 'No newer compatible release'}}}
+        controller._reconcile_deployments('one', record)
+        self.assertEqual(store.get_deployment(deployment['id'])['results']['one']['status'], 'cancelling')
+        controller._client.return_value.request.assert_called_once_with('/api/v3/fleet/update-cancel')
+
+    def test_already_installed_inventory_cannot_complete_checking_or_cancelling(self):
+        for status in ('checking', 'cancelling'):
+            with self.subTest(status=status):
+                store, controller, deployment, _ = self.cancellation_fixture('already-' + status)
+                store.set_deployment_target(deployment['id'], 'one', 'checking', dispatch={
+                    'baseline': {'release_sequence': 2816, 'firmware_release_sequence': 2816},
+                    'command_ids': ['this-job']})
+                if status == 'cancelling':
+                    store.set_deployment_target(deployment['id'], 'one', 'cancelling')
+                    controller._client.return_value.request.return_value = {'status': 'cancelling'}
+                record = {'inventory': {'device': {'release_sequence': 2816,
+                    'firmware_release_sequence': 2816}}, 'fleet': {'policy': {'commands': [
+                        {'id': 'this-job', 'release_sequence': 2816, 'release_type': 'universal',
+                            'action': 'check-update'}]}, 'pending_commands': [
+                        {'id': 'this-job', 'release_sequence': 2816, 'release_type': 'universal',
+                            'action': 'check-update'}]}}
+                controller._reconcile_deployments('one', record)
+                self.assertEqual(store.get_deployment(deployment['id'])['results']['one']['status'], status)
 
     def test_cancel_queued_deployment_never_dispatches_and_allows_new_action(self):
         store, controller, deployment, request = self.cancellation_fixture('queued')

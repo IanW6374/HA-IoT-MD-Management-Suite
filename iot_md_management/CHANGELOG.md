@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.2.2 - 2026-10-10
+
+- Reject already-installed updates after a fresh device poll, before dispatching
+  upgrade commands. Confirm installation using the job's recorded starting
+  versions and command identities; matching command failures take precedence
+  over an installed-version match.
+- Refresh deployment status independently of catalog and log requests. Protect
+  acknowledged results from older reads with persistent per-target revisions,
+  including changes made within the same second.
+- Render every Cancel all acknowledgement immediately, including activity
+  history. Bound the UI acknowledgement wait to 45 seconds and continue the
+  batch; reconcile uncertain outcomes with reads, without aborting or repeating
+  cancellation writes. Accept late acknowledgements without rewinding results.
+- Show intentional cancellations in amber, genuine failures in red, and include
+  per-device outcome counts in history-dot tooltips.
+- Existing history is retained; this release does not retroactively change
+  earlier installed results or perform cleanup on devices.
+
 ## 3.2.1 - 2026-10-10
 
 - Place compact per-device cancellation badges immediately before live statuses,

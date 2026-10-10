@@ -359,6 +359,8 @@ class FleetRepository:
         value['profile_fields'] = _object(value['profile_fields'], [])
         value['targets'] = _object(value['targets'], [])
         value['results'] = _object(value['results'], {})
+        value['revision'] = sum(int(result.get('revision', 0))
+                                for result in value['results'].values())
         value['administrator_override'] = bool(value['administrator_override'])
         return value
 
@@ -707,7 +709,7 @@ class FleetRepository:
         return [self._deployment(row) for row in rows]
 
     def set_deployment_target(self, identifier, device_id, status, detail='', progress=None,
-                              cancellation_refused=False):
+                              cancellation_refused=False, dispatch=None):
         terminal = {'complete', 'failed', 'staged', 'cancelled'}
         milestone_ranks = {
             'queued': 0, 'active': 0, 'running': 0,
@@ -741,7 +743,11 @@ class FleetRepository:
             deployment['results'][device_id] = {
                 'status': str(status)[:32], 'detail': str(detail)[:256],
                 'updated_at': self.now(), 'milestone_rank': milestone_rank,
+                'revision': int(previous_result.get('revision', 0)) + 1,
             }
+            if dispatch is not None or 'dispatch' in previous_result:
+                deployment['results'][device_id]['dispatch'] = (
+                    dispatch if dispatch is not None else previous_result['dispatch'])
             milestones = list(previous_result.get('update_milestones', ()))
             allowed = ('queued', 'inspect', 'core_write', 'core_verify',
                        'application_download', 'application_verify', 'pair',

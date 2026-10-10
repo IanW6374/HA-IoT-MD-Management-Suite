@@ -16,6 +16,12 @@ def compose(html):
             line = line.replace("${targets}</div></details>`:''", "${targets}</div></details>`:`<div class=\"deployment-targets\">${targets}</div>`")
         lines[index] = line
     html = '\n'.join(lines)
+    html = '\n'.join(line for line in html.split('\n')
+                     if not line.startswith("let deploymentRefreshBusy="))
+    html = html.replace('const activePage=', (assets / 'deployment_status.js').read_text() + '\nconst activePage=', 1)
+    html = html.replace('if(values.deployments)state.deployments=values.deployments.deployments||[];', '')
+    html = html.replace("if(activePage==='actions')refreshDeploymentProgress()",
+                        "if(activePage==='actions')refreshVisibleDeploymentStatus()")
     html = html.replace("['complete','failed','partial','staged']", "['complete','failed','partial','staged','cancelled']")
     html = html.replace("warn=['queued'", "warn=['cancelling','cancelled','queued'")
     html = html.replace('const activePage=', (assets / 'update_cancel.js').read_text() + '\nconst activePage=', 1)
@@ -95,6 +101,8 @@ def compose(html):
     html = html.replace('<h1 id="actions-title">New action</h1>', '<h1 id="actions-title">Create action</h1>')
     html = html.replace("names.map(name=>api('api/'+name))", "names.map(name=>api(auditEndpoint(name)))")
     html = html.replace("names.map(name=>api(auditEndpoint(name)))", "names.map(name=>name==='devices'?refreshDeviceStatus():api(auditEndpoint(name)))")
+    html = html.replace("name==='devices'?refreshDeviceStatus():api(auditEndpoint(name))",
+                        "name==='deployments'?refreshDeploymentProgress():name==='devices'?refreshDeviceStatus():api(auditEndpoint(name))")
     html = html.replace('if(values.devices)state.devices=values.devices.devices||[];', '')
     html = html.replace("api('api/backups'),api('api/devices')", "api('api/backups'),refreshDeviceStatus()")
     html = html.replace('state.devices=devices.devices;state.backups=', 'state.backups=')
@@ -117,6 +125,7 @@ def compose(html):
     html = html.replace('Newest activity first.', 'Search retained administrative and device events. The latest 500 matches from each source are shown.')
     # Completed action dots convey the outcome without repeating a status badge.
     html = html.replace('<span class="event-dot"></span><div><div class="title-row"><strong>${esc(content', '${logStatusDot(deployment.status)}<div><div class="title-row"><strong>${esc(content')
+    html = html.replace('${logStatusDot(deployment.status)}', '${deploymentOutcomeDot(deployment)}')
     html = html.replace("${esc(content||'Configuration deployment')}</strong>${statusBadge(deployment.status)}", "${esc(content||'Configuration deployment')}</strong>")
     html = html.replace('<span class="event-dot"></span><div><div class="title-row"><strong>${recovery?', '${logStatusDot(job.status===\'complete\'?(recovery?\'Recovery prepared\':\'Image verified\'):job.status)}<div><div class="title-row"><strong>${recovery?')
     html = html.replace("</strong>${statusBadge(job.status==='complete'?(recovery?'Recovery prepared':'Image verified'):job.status)}", '</strong>')

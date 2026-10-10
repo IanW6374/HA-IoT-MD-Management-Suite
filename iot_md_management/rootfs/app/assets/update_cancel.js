@@ -1,11 +1,18 @@
-const updateCancelPending = new Set(), updateCancelErrors = new Map(), updateCancelAllPending = new Set();
+const updateCancelPending = new Set(), updateCancelErrors = new Map(), updateCancelAllPending = new Set(), updateCancelUncertain = new Set();
+function reconcileUpdateCancellations(){
+  for(const deployment of state.deployments)for(const id of deployment.targets){
+    if(['complete','failed','cancelled'].includes(deployment.results[id]?.status)){
+      const key=deployment.id+':'+id;updateCancelUncertain.delete(key);updateCancelErrors.delete(key);
+    }
+  }
+}
 function updateCancelDeviceBadge(deployment, id) {
   if (!deployment.update) return '';
   const result=deployment.results[id]||{status:'queued'}, key=deployment.id+':'+id;
   if (['complete','failed','cancelled'].includes(result.status)) return '';
-  const busy=updateCancelPending.has(key)||result.status==='cancelling', installing=result.status==='installing';
+  const busy=updateCancelPending.has(key)||result.status==='cancelling', installing=result.status==='installing', uncertain=updateCancelUncertain.has(key);
   const device=state.devices.find(item=>item.id===id), label=device?.host||id;
-  return `<button class="badge cancel-badge ${busy?'warn':'danger'}" type="button" data-deployment="${esc(deployment.id)}" data-device="${esc(id)}" onclick="cancelDeploymentUpdate(this)" ${busy||installing||updateCancelAllPending.has(deployment.id)?'disabled':''} aria-label="Cancel update for ${esc(label)}" title="${installing?'Installation has begun; wait for confirmation before rollback':'Cancel staging for '+esc(label)+'; does not roll back an installed release'}">${busy?'Cancelling…':'Cancel'}</button>`;
+  return `<button class="badge cancel-badge ${busy||uncertain?'warn':'danger'}" type="button" data-deployment="${esc(deployment.id)}" data-device="${esc(id)}" onclick="cancelDeploymentUpdate(this)" ${busy||uncertain||installing||updateCancelAllPending.has(deployment.id)?'disabled':''} aria-label="Cancel update for ${esc(label)}" title="${installing?'Installation has begun; wait for confirmation before rollback':uncertain?'Cancellation acknowledgement is uncertain; checking status without repeating the request':'Cancel staging for '+esc(label)+'; does not roll back an installed release'}">${uncertain?'Checking…':busy?'Cancelling…':'Cancel'}</button>`;
 }
 function updateCancelError(deployment,id) {
   const error=updateCancelErrors.get(deployment.id+':'+id);
@@ -13,7 +20,7 @@ function updateCancelError(deployment,id) {
 }
 function updateCancelEligible(deployment,id) {
   const status=deployment.results[id]?.status||'queued';
-  return !!deployment.update&&deployment.targets.includes(id)&&!['complete','failed','cancelled','cancelling','installing'].includes(status)&&!updateCancelPending.has(deployment.id+':'+id);
+  return !!deployment.update&&deployment.targets.includes(id)&&!['complete','failed','cancelled','cancelling','installing'].includes(status)&&!updateCancelPending.has(deployment.id+':'+id)&&!updateCancelUncertain.has(deployment.id+':'+id);
 }
 function updateCancelAllBadge(deployment) {
   if (!deployment.update||deployment.targets.every(id=>['complete','failed','cancelled'].includes(deployment.results[id]?.status)))return '';
@@ -22,32 +29,40 @@ function updateCancelAllBadge(deployment) {
 }
 async function requestDeploymentCancellation(deployment_id,device_id) {
   const key=deployment_id+':'+device_id;
-  updateCancelPending.add(key);updateCancelErrors.delete(key);renderDeployments();
+  deploymentMutationEpoch++;
+  updateCancelPending.add(key);updateCancelErrors.delete(key);renderDeploymentStatus();
+  let timer;
   try {
-    const result=await api('api/deployments/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deployment_id,device_id})});
-    const index=state.deployments.findIndex(item=>item.id===result.id);
-    if(index>=0)state.deployments[index]=result;
-  } catch(error) { updateCancelErrors.set(key,error.message); }
-  finally {updateCancelPending.delete(key);renderDeployments();}
+    const acknowledgement=api('api/deployments/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deployment_id,device_id})}).then(result=>{
+      if(result?.id!==deployment_id||!result.results?.[device_id])throw Error('Invalid cancellation acknowledgement');
+      deploymentMutationEpoch++;applyDeploymentSnapshot(result);
+      updateCancelUncertain.delete(key);updateCancelErrors.delete(key);renderDeploymentStatus();
+      return result;
+    });
+    // Do not abort or replay a mutation. Bound only how long the UI waits;
+    // a late acknowledgement still updates the view safely using its revision.
+    await Promise.race([acknowledgement,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Cancellation acknowledgement timed out; checking status. Do not repeat the request.')),45000);})]);
+  } catch(error) { updateCancelUncertain.add(key);updateCancelErrors.set(key,error.message); }
+  finally {clearTimeout(timer);updateCancelPending.delete(key);renderDeploymentStatus();refreshDeploymentProgress().catch(()=>{});}
 }
 async function cancelDeploymentUpdate(button) {
   const deployment_id=button.dataset.deployment,device_id=button.dataset.device, deployment=state.deployments.find(item=>item.id===deployment_id);
   if(!deployment||!updateCancelEligible(deployment,device_id)||updateCancelAllPending.has(deployment_id))return;
   if (!confirm('Cancel this device update? Staged data will be discarded. Installation cannot be cancelled after it starts.')) return;
   await requestDeploymentCancellation(deployment_id,device_id);
-  refreshDeploymentProgress().catch(error=>showWorkspaceError('Update status could not be refreshed',error));
+  refreshDeploymentProgress().catch(()=>{});
 }
 async function cancelAllDeploymentUpdates(button) {
   const deployment_id=button.dataset.deployment,deployment=state.deployments.find(item=>item.id===deployment_id);
   if(!deployment?.update||updateCancelAllPending.has(deployment_id))return;
   const targets=deployment.targets.filter(id=>updateCancelEligible(deployment,id));
   if(!targets.length||!confirm('Cancel all queued and staging updates in this job? Devices already installing will be left running.'))return;
-  updateCancelAllPending.add(deployment_id);renderDeployments();
+  updateCancelAllPending.add(deployment_id);renderDeploymentStatus();
   try {
     for(const id of targets) {
       const current=state.deployments.find(item=>item.id===deployment_id);
       if(current&&updateCancelEligible(current,id))await requestDeploymentCancellation(deployment_id,id);
     }
-  } finally {updateCancelAllPending.delete(deployment_id);renderDeployments();}
-  refreshDeploymentProgress().catch(error=>showWorkspaceError('Update status could not be refreshed',error));
+  } finally {updateCancelAllPending.delete(deployment_id);renderDeploymentStatus();}
+  refreshDeploymentProgress().catch(()=>{});
 }
