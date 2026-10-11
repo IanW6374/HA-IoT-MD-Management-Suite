@@ -29,41 +29,44 @@ function statusBadge(value){const bad=['failed','partial','unavailable'],warn=['
 function deviceSchedule(device){const schedule=device.inventory?.configuration?.automatic_updates||{},days=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];if(schedule.schedule==='daily')return `Daily at ${schedule.time}`;if(schedule.schedule==='weekly')return `${days[Number(schedule.weekday)||0]} at ${schedule.time}`;return 'Automatic schedule disabled'}
 function operationFlow(labels,step,percent=0,failed=false){return `<div class="flow" style="--flow-columns:${labels.length}">${labels.map((label,index)=>`<div class="flow-step ${index<step?'done':index===step?'current':''}"><span>${failed&&index===step?'!':index<step?'✓':index===step?`${percent}%`:index+1}</span>${label}</div>`).join('')}</div>`}
 function milestoneFlow(labels,counts,total,failed=false){
- total=Math.max(Number(total)||0,1);const active=arguments[4]||[],failures=arguments[5]||[],filter=arguments[6];
+ total=Math.max(Number(total)||0,1);const active=arguments[4]||[],failures=arguments[5]||[],filter=arguments[6],waiting=arguments[7]||[],blocked=arguments[8]||[];
  return `<div class="flow fleet-flow" style="--flow-columns:${labels.length}">${labels.map((label,index)=>{
-  const count=Math.min(total,Math.max(0,Number(counts[index])||0)),percent=Math.round(count/total*100),done=count===total,running=Number(active[index])||0,errors=Number(failures[index])||0;
+  const count=Math.min(total,Math.max(0,Number(counts[index])||0)),percent=Math.round(count/total*100),done=count===total,errors=Math.min(total-count,Math.max(0,Number(failures[index])||0)),running=Math.min(total-count-errors,Math.max(0,Number(active[index])||0)),queued=Math.min(total-count-errors-running,Math.max(0,Number(waiting[index])||0)),pending=total-count-errors-running-queued;
+  const completeEnd=count/total*100,activeEnd=(count+running)/total*100,failedEnd=(count+running+errors)/total*100;
+  const blockedCount=Math.min(pending,Math.max(0,Number(blocked[index])||0));
   const tone=done?'done':`${count>0?'partial ':''}${running?'current ':''}${errors?'failed':''}`.trim(),state=errors?'Failed':running?'Active':done?'Complete':'Not running';
-  const description=`${count} of ${total} devices completed this milestone (${percent}%)${running?`; ${running} in progress`:''}${errors?`; ${errors} failed here`:''}`;
-  const control=`<span class="flow-ring" role="img" aria-label="${state}: ${esc(description)}" style="--milestone-progress:${percent}%"><b>${done?'✓':`${count}/${total}`}</b></span><strong>${esc(label)}</strong>`;
+  const description=`${count} of ${total} devices completed this milestone (${percent}%)${running?`; ${running} in progress`:''}${errors?`; ${errors} failed here`:''}${queued?`; ${queued} waiting to start`:''}${blockedCount?`; ${blockedCount} blocked by an earlier failure`:''}${pending>blockedCount?`; ${pending-blockedCount} not started`:''}`;
+  const control=`<span class="flow-ring" role="img" aria-label="${state}: ${esc(description)}" style="--milestone-progress:${percent}%;--ring-complete-end:${completeEnd}%;--ring-active-end:${activeEnd}%;--ring-failed-end:${failedEnd}%"><b>${done?'✓':`${count}/${total}`}</b></span><strong>${esc(label)}</strong>`;
   return `<div class="flow-step fleet-flow-step ${tone}" title="${state}: ${esc(description)}" data-milestone-state="${state}">${filter?`<button class="milestone-filter" type="button" data-operation="${esc(filter.id)}" data-stage="${esc(filter.names[index])}" aria-label="${state}: ${esc(description)}. Show devices currently at ${esc(label)}" onclick="filterOperationStage(this)">${control}</button>`:control}</div>`;
  }).join('')}</div>`;
 }
 function milestoneActivity(results,completed,names){
- const active=names.map(()=>0),failures=names.map(()=>0);
+ const active=names.map(()=>0),failures=names.map(()=>0),waiting=names.map(()=>0),blocked=names.map(()=>0);
  results.forEach((value,index)=>{
-  if(value.status==='complete'||['queued','staged','scheduled','cancelled'].includes(value.status))return;
+  if(['complete','cancelled'].includes(value.status))return;
   const next=names.findIndex(name=>!completed[index].has(name));
   if(next<0)return;
+  if(['queued','staged','scheduled'].includes(value.status)){waiting[next]++;return;}
   const phase=names.indexOf(value.update_phase),current=phase>=0&&!completed[index].has(names[phase])?phase:next;
-  if(value.status==='failed'){failures[current]++;return}
+  if(value.status==='failed'){failures[current]++;names.forEach((name,stage)=>{if(stage>current&&!completed[index].has(name))blocked[stage]++;});return;}
   active[current]++;
  });
- return {active,failures};
+ return {active,failures,waiting,blocked};
 }
 function flowFor(deployment){
  const results=deployment.targets.map(id=>deployment.results?.[id]||{status:'queued'}),total=Math.max(results.length,1),failed=results.some(value=>value.status==='failed');
  if(deployment.update?.release_type==='universal'){
   const steps=[['queued','Queued'],['inspect','Inspect release'],['core_write','Download & write core'],['core_verify','Verify core'],['application_download','Download application'],['application_verify','Verify & stage application'],['pair','Pair components'],['install','Restart & install'],['complete','Confirm healthy']];
   const completed=results.map(value=>{const names=new Set(value.update_milestones||[]);names.add('queued');if(value.status==='complete')steps.forEach(([name])=>names.add(name));else if(['staged','scheduled','installing'].includes(value.status)||Number(value.milestone_rank)>=2)steps.slice(0,7).forEach(([name])=>names.add(name));return names});
-  const names=steps.map(([name])=>name),counts=names.map(name=>completed.filter(items=>items.has(name)).length),{active,failures}=milestoneActivity(results,completed,names);
-  return `<div class="universal-flow">${milestoneFlow(steps.map(item=>item[1]),counts,total,failed,active,failures,{id:deployment.id,names})}</div>`;
+  const names=steps.map(([name])=>name),counts=names.map(name=>completed.filter(items=>items.has(name)).length),{active,failures,waiting,blocked}=milestoneActivity(results,completed,names);
+  return `<div class="universal-flow">${milestoneFlow(steps.map(item=>item[1]),counts,total,failed,active,failures,{id:deployment.id,names},waiting,blocked)}</div>`;
  }
  const labels=['Queued','Verify & stage','Restart & install','Confirm healthy'],ranks={queued:0,active:0,running:0,checking:1,staging:1,staged:2,scheduled:2,installing:3,complete:4,failed:0},thresholds=[0,2,4,4],counts=thresholds.map(threshold=>results.filter(value=>Math.max(Number(value.milestone_rank)||0,ranks[value.status]??0)>=threshold).length);
  const names=['queued','stage','install','complete'],completed=results.map(value=>new Set(names.filter((name,index)=>Math.max(Number(value.milestone_rank)||0,ranks[value.status]??0)>=thresholds[index])));
  // Installation and final health confirmation share a completion boundary,
  // but are distinct active phases while the device is restarting.
- const phases=results.map(value=>({...value,update_phase:value.status==='installing'?'install':value.update_phase==='complete'?'complete':'stage'})),{active,failures}=milestoneActivity(phases,completed,names);
- return milestoneFlow(labels,counts,total,failed,active,failures,{id:deployment.id,names});
+ const phases=results.map(value=>({...value,update_phase:value.status==='installing'?'install':value.update_phase==='complete'?'complete':'stage'})),{active,failures,waiting,blocked}=milestoneActivity(phases,completed,names);
+ return milestoneFlow(labels,counts,total,failed,active,failures,{id:deployment.id,names},waiting,blocked);
 }
 function deploymentTargets(deployment){return deployment.targets.map(id=>{const result=deployment.results[id]||{status:'queued',detail:'Waiting to start'},device=state.devices.find(item=>item.id===id);return `<div class="target-result"><div><strong>${esc(device?.name||id)}</strong><br><small>${esc(result.detail||'')}</small></div>${statusBadge(result.status)}</div>`}).join('')}
 function activeDeploymentCard(deployment){const update=deployment.update||{},content=[update.version&&`${update.version} · ${update.release_type}`,deployment.profile_name&&`Profile: ${deployment.profile_name}`].filter(Boolean).join(' + '),activation=deployment.activation==='now'?'Install now':deployment.activation==='schedule'?'Device schedule':'Stage only',targets=deploymentTargets(deployment),firstId=deployment.targets[0],first=(deployment.results||{})[firstId]||{detail:'Waiting to start'},device=state.devices.find(item=>item.id===firstId),summary=deployment.targets.length===1?[device?.name||firstId,activation,first.detail].filter(Boolean).join(' · '):`${deployment.targets.length} devices · ${activation}`,deviceResults=deployment.targets.length>1?`<details data-disclosure-key="deployment-progress-${esc(deployment.id)}"><summary>View device progress</summary><div class="deployment-targets">${targets}</div></details>`:'';return `<article class="card deployment" title="${esc(deployment.id)}"><div class="title-row"><h2>${esc(content||'Configuration deployment')}</h2>${statusBadge(deployment.status)}</div><p>${esc(summary)}</p>${flowFor(deployment)}${deviceResults}</article>`}

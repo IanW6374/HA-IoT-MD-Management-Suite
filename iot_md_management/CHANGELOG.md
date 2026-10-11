@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.2.6 - 2026-10-11
+
+- Show proportional milestone ring segments for the full target count: green
+  for completed, amber for in progress, red for failed at that stage and grey
+  for not started. Queued targets remain grey; one failure no longer paints
+  an entire batch's ring red.
+- Keep earlier completed stages green after a failure. Later unreached stages
+  stay grey, with accessible hover text identifying targets blocked by an
+  earlier failure. Apply the same shared rules to other action types.
+- Remove the duplicate installed/running/queued outcome summary row; retain
+  ring counts, accessible details and searchable per-device outcomes.
+
 ## 3.2.5 - 2026-10-11
 
 - Simplify shared milestone rings across all action types: grey for not running,

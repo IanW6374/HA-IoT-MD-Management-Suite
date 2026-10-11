@@ -13,12 +13,52 @@ function render(results,type='universal'){
 }
 function steps(html){return [...html.matchAll(/<div class="flow-step fleet-flow-step ([^"]*)" title="([^"]*)" data-milestone-state="([^"]*)">.*?<strong>(.*?)<\/strong>/g)].map(([,tone,title,state,label])=>({tone,title,state,label}));}
 
-test('rings have explicit accessible states, with failure taking precedence over concurrent work',()=>{
+test('rings retain accessible states without discarding concurrent work colours',()=>{
   const html=render({one:{status:'complete'},two:{status:'staging',update_phase:'core_write',update_milestones:['inspect']}});
   assert.deepEqual(steps(html).map(step=>step.state),['Complete','Complete','Active',...Array(6).fill('Not running')]);
   assert.match(html,/aria-label="Active: 1 of 2 devices completed/);
   assert.doesNotMatch(html,/milestone-counts|milestone-running|milestone-errors/);
   assert.equal(steps(render({one:{status:'checking'},two:{status:'failed'}}))[1].state,'Failed');
+});
+
+function ringSegments(html,index){
+ const styles=[...html.matchAll(/style="--milestone-progress:[^"]*--ring-complete-end:([^%]+)%;--ring-active-end:([^%]+)%;--ring-failed-end:([^%]+)%"/g)];
+ const [,greenEnd,amberEnd,redEnd]=styles[index].map(Number);
+ return [greenEnd,amberEnd-greenEnd,redEnd-amberEnd,100-redEnd];
+}
+function closeSegments(actual,expected){actual.forEach((value,index)=>assert.ok(Math.abs(value-expected[index])<0.000001,`${actual} != ${expected}`));}
+test('inspection shows proportional red/amber/grey for failed, running and queued devices',()=>{
+ const html=render({one:{status:'failed'},two:{status:'checking'},three:{status:'queued'}});
+ closeSegments(ringSegments(html,1),[0,100/3,100/3,100/3]);
+ closeSegments(ringSegments(html,2),[0,0,0,100]);
+ assert.match(html,/1 in progress; 1 failed here; 1 waiting to start/);
+});
+test('one failed and two inspecting devices show one-third red and two-thirds amber',()=>{
+ closeSegments(ringSegments(render({one:{status:'failed'},two:{status:'checking'},three:{status:'checking'}}),1),[0,200/3,100/3,0]);
+});
+test('mixed rings keep completed green, running amber, failed red and future grey in the full denominator',()=>{
+ const html=render({one:{status:'complete'},two:{status:'staging',update_phase:'core_write',update_milestones:['inspect']},three:{status:'failed',update_phase:'core_write',update_milestones:['inspect']},four:{status:'queued'}});
+ closeSegments(ringSegments(html,2),[25,25,25,25]);
+ closeSegments(ringSegments(html,3),[25,0,0,75]);
+ assert.match(steps(html)[3].title,/1 blocked by an earlier failure; 2 not started/);
+});
+test('a later failure leaves earlier completed stages green and only its failed stage red',()=>{
+ const html=render({one:{status:'failed',update_phase:'application_verify',update_milestones:['queued','inspect','core_write','core_verify','application_download']},two:{status:'complete'}});
+ for(let index=0;index<5;index++)closeSegments(ringSegments(html,index),[100,0,0,0]);
+ closeSegments(ringSegments(html,5),[50,0,50,0]);
+ for(let index=6;index<9;index++){
+  closeSegments(ringSegments(html,index),[50,0,0,50]);
+  assert.match(steps(html)[index].title,/1 blocked by an earlier failure/);
+  assert.doesNotMatch(steps(html)[index].title,/failed here/);
+ }
+});
+test('missing, cancelled and scheduled targets remain grey at their unfinished milestones',()=>{
+ for(const status of ['queued','cancelled','scheduled','staged']){
+  const html=render({one:{status},two:{status:'complete'}});
+  closeSegments(ringSegments(html,status==='scheduled'||status==='staged'?7:1),[50,0,0,50]);
+ }
+ context.deployment={targets:['one','two','three'],results:{one:{status:'complete'}},update:{release_type:'universal'}};
+ closeSegments(ringSegments(vm.runInContext('flowFor(deployment)',context),1),[100/3,0,0,200/3]);
 });
 
 test('reported three-device case highlights only inspection, not every partial milestone',()=>{

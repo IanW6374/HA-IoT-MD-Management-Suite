@@ -22,20 +22,24 @@ function fixture(count=100,type='universal'){
 test('100-target batch has bounded rows and separate outcomes, not a made-up overall percentage',()=>{
  const {dom,doc}=fixture();try{
   assert.equal(doc.querySelectorAll('.operation-device-row').length,25);
-  assert.match(doc.querySelector('.batch-summary').textContent,/10 of 100 installed.*60 in progress.*10 queued.*10 failed.*10 cancelled/);
+  assert.equal(doc.querySelector('.batch-summary'),null);
   assert.match(doc.querySelector('.operation-pager').textContent,/1–25 of 100/);
   assert.ok(doc.querySelectorAll('[data-milestone-state="Failed"]').length);
   assert.equal(doc.querySelectorAll('.milestone-counts,.milestone-running,.milestone-errors').length,0);
   assert.match(doc.querySelector('[data-milestone-state="Failed"] .flow-ring').getAttribute('aria-label'),/60 in progress.*10 failed here/);
-  assert.doesNotMatch(doc.querySelector('.batch-summary').textContent,/%/);
+  const ring=doc.querySelector('[data-milestone-state="Failed"] .flow-ring');
+  assert.equal(ring.style.getPropertyValue('--ring-complete-end'),'10%');
+  assert.equal(ring.style.getPropertyValue('--ring-active-end'),'70%');
+  assert.equal(ring.style.getPropertyValue('--ring-failed-end'),'80%');
  }finally{dom.window.close();}
 });
-test('shared ring styles distinguish pending, active, failed and complete without extra label rows',()=>{
+test('shared ring styles use proportional state colours without extra label rows',()=>{
  const {w,doc}=fixture(3);try{
   w.deployment.results['device-1']={status:'staging',update_phase:'core_write',update_milestones:['queued','inspect']};
   w.deployment.results['device-2']={status:'failed',update_phase:'application_verify',update_milestones:['queued','inspect']};
   w.renderDeployments();
   const style=doc.createElement('style');style.textContent=progressCSS;doc.head.append(style);
+  assert.match(progressCSS,/background:conic-gradient\(var\(--good\).*var\(--warn\).*var\(--bad\).*var\(--line\)/);
   for(const [state,tone] of [['Not running','line'],['Active','warn'],['Failed','bad'],['Complete','good']]){
    const step=doc.querySelector(`[data-milestone-state="${state}"]`);assert.ok(step,state);
    assert.equal(w.getComputedStyle(step).getPropertyValue('--ring-tone'),`var(--${tone})`);
@@ -68,16 +72,28 @@ test('search, focused text/caret, stage, outcome, selection and page survive ref
   assert.equal(doc.querySelector('[data-operation-field="outcome"]').value,'running');assert.equal(doc.querySelector('.operation-detail-row').textContent,selected);
  }finally{w.close();}
 });
-test('application, core and profile actions use the same summary/table without fake transfer data',()=>{
+test('application, core and profile actions omit duplicate summaries and share rings/table',()=>{
  for(const type of ['application','firmware','profile']){
   const {w,doc}=fixture(3,type);try{
    assert.equal(doc.querySelectorAll('.operation-device-row').length,3);
    assert.equal(doc.querySelectorAll('progress').length,0);
-   assert.match(doc.querySelector('.batch-summary').textContent,type==='profile'?/3 of 3 applied/:/3 of 3 installed/);
+   assert.equal(doc.querySelector('.batch-summary'),null);
+   assert.ok([...doc.querySelectorAll('.flow-ring')].every(ring=>ring.style.getPropertyValue('--ring-complete-end')==='100%'));
    assert.equal(doc.querySelectorAll('.flow-step').length,type==='profile'?3:4);
    if(type==='profile')assert.doesNotMatch(doc.getElementById('deployments').textContent,/Restart & install|Confirm healthy/);
   }finally{w.close();}
  }
+});
+test('profile failures keep confirmation grey and explain the blocked share',()=>{
+ const {w,doc}=fixture(3,'profile');try{
+  w.deployment.results['device-1']={status:'running'};
+  w.deployment.results['device-2']={status:'failed'};
+  w.renderDeployments();
+  const rings=doc.querySelectorAll('.flow-ring');
+  assert.match(rings[1].getAttribute('aria-label'),/1 in progress; 1 failed here/);
+  assert.match(rings[2].getAttribute('aria-label'),/1 blocked by an earlier failure/);
+  assert.equal(rings[2].style.getPropertyValue('--ring-active-end'),rings[2].style.getPropertyValue('--ring-failed-end'));
+ }finally{w.close();}
 });
 test('restart and missing/invalid measurements have no numeric progress',()=>{
  const {w,doc}=fixture(3);try{
@@ -88,15 +104,21 @@ test('restart and missing/invalid measurements have no numeric progress',()=>{
   assert.ok([...doc.querySelectorAll('.operation-device-row')].every(row=>!row.textContent.includes('%')));
  }finally{w.close();}
 });
-test('backup summary retains completed and failed jobs when active jobs shrink; stale reads cannot rewind terminal state',async()=>{
+test('backup rings retain completed and failed jobs when active jobs shrink; stale reads cannot rewind terminal state',async()=>{
  const {w,doc}=fixture(3);try{
   const jobs=[{id:1,kind:'backup',target:'device-0',status:'complete',updated_at:5},{id:2,kind:'backup',target:'device-1',status:'running',updated_at:5},{id:3,kind:'backup',target:'device-2',status:'failed',updated_at:5,last_error:'Transport failed'}];
   w.renderBackupProgress(jobs);
   w.api=async path=>{assert.equal(path,'api/jobs?ids=1,2,3');return {jobs};};
   w.renderBackupProgress(await w.trackedBackupJobs({active_jobs:[jobs[1]]}));
-  assert.match(doc.getElementById('backup-progress').textContent,/1 of 3 backed up.*1 in progress.*1 failed/);
+  const backingUp=doc.querySelectorAll('#backup-progress .flow-ring')[1];
+  assert.match(backingUp.getAttribute('aria-label'),/1 of 3.*1 in progress.*1 failed here/);
+  assert.ok(Math.abs(parseFloat(backingUp.style.getPropertyValue('--ring-complete-end'))-100/3)<0.000001);
+  assert.ok(Math.abs(parseFloat(backingUp.style.getPropertyValue('--ring-active-end'))-200/3)<0.000001);
+  assert.equal(backingUp.style.getPropertyValue('--ring-failed-end'),'100%');
+  assert.match(doc.querySelectorAll('#backup-progress .flow-ring')[2].getAttribute('aria-label'),/1 blocked by an earlier failure/);
+  assert.equal(doc.querySelector('.batch-summary'),null);
   w.renderBackupProgress(jobs.map(job=>({...job,status:'queued',updated_at:4})));
-  assert.match(doc.getElementById('backup-progress').textContent,/1 of 3 backed up/);
+  assert.match(doc.querySelectorAll('#backup-progress .flow-ring')[1].getAttribute('aria-label'),/1 of 3/);
   assert.equal(doc.querySelectorAll('#backup-active-list .operation-device-row').length,3);
   assert.equal(doc.querySelectorAll('#backup-active-list progress').length,0);
   w.selectOperationDevice(doc.querySelector('#backup-active-list .operation-select'));
@@ -117,6 +139,7 @@ test('USB/reset and restore flow use completion counts and never claim boot succ
   assert.equal(doc.querySelectorAll('b').length,3);assert.equal(doc.querySelectorAll('b')[2].textContent,'0/1');assert.doesNotMatch(doc.body.textContent,/%/);
   const failed=w.singleActionFlow(['Preview configuration','Apply configuration','Restart required'],{stage:1,status:'failed'});
   assert.match(failed,/1 failed here/);assert.doesNotMatch(failed,/1 running/);
+  assert.match(failed,/blocked by an earlier failure/);
  }finally{w.close();}
 });
 test('restore acknowledges configuration without claiming restart; read failure never repeats a write',async()=>{
