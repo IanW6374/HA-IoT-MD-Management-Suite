@@ -82,6 +82,8 @@ test('backup summary retains completed and failed jobs when active jobs shrink; 
   assert.match(doc.getElementById('backup-progress').textContent,/1 of 3 backed up/);
   assert.equal(doc.querySelectorAll('#backup-active-list .operation-device-row').length,3);
   assert.equal(doc.querySelectorAll('#backup-active-list progress').length,0);
+  w.selectOperationDevice(doc.querySelector('#backup-active-list .operation-select'));
+  assert.equal(doc.querySelectorAll('#backup-active-list .operation-detail-row').length,1);
  }finally{w.close();}
 });
 test('backup batch validates read responses and chunks large fleets into bounded requests',async()=>{

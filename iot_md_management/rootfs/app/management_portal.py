@@ -44,8 +44,8 @@ function milestoneActivity(results,completed,names){
   if(value.status==='complete'||['queued','staged','scheduled','cancelled'].includes(value.status))return;
   const next=names.findIndex(name=>!completed[index].has(name));
   if(next<0)return;
-  if(value.status==='failed'){failures[next]++;return}
   const phase=names.indexOf(value.update_phase),current=phase>=0&&!completed[index].has(names[phase])?phase:next;
+  if(value.status==='failed'){failures[current]++;return}
   active[current]++;
  });
  return {active,failures};

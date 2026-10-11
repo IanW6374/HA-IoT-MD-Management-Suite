@@ -6,12 +6,12 @@ function reconcileUpdateCancellations(){
     }
   }
 }
-function updateCancelDeviceBadge(deployment, id) {
+function updateCancelDeviceBadge(deployment, id, knownDevice) {
   if (!deployment.update) return '';
   const result=deployment.results[id]||{status:'queued'}, key=deployment.id+':'+id;
   if (['complete','failed','cancelled'].includes(result.status)) return '';
   const busy=updateCancelPending.has(key)||result.status==='cancelling', installing=result.status==='installing', uncertain=updateCancelUncertain.has(key);
-  const device=state.devices.find(item=>item.id===id), label=device?.host||id;
+  const device=knownDevice||state.devices.find(item=>item.id===id), label=device?.host||id;
   return `<button class="badge cancel-badge ${busy||uncertain?'warn':'danger'}" type="button" data-deployment="${esc(deployment.id)}" data-device="${esc(id)}" onclick="cancelDeploymentUpdate(this)" ${busy||uncertain||installing||updateCancelAllPending.has(deployment.id)?'disabled':''} aria-label="Cancel update for ${esc(label)}" title="${installing?'Installation has begun; wait for confirmation before rollback':uncertain?'Cancellation acknowledgement is uncertain; checking status without repeating the request':'Cancel staging for '+esc(label)+'; does not roll back an installed release'}">${uncertain?'Checking…':busy?'Cancelling…':'Cancel'}</button>`;
 }
 function updateCancelError(deployment,id) {

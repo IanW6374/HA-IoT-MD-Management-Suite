@@ -100,3 +100,8 @@ test('failed device retains prior staged milestones but does not count as confir
   assert.equal((html.match(/<b>✓<\/b>/g)||[]).length,7);
   assert.match(html,/milestone-progress:50%.*?<b>1\/2<\/b>.*?Confirm healthy/);
 });
+test('failure markers use the same explicit device phase as the table even after missed polls',()=>{
+ const flow=steps(render({one:{status:'failed',update_phase:'core_write',update_milestones:['queued']}}));
+ assert.equal(flow[1].tone,'');assert.match(flow[2].tone,/failed/);
+ assert.match(flow[2].title,/1 failed here/);
+});

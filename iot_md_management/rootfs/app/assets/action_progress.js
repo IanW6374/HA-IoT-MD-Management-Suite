@@ -2,7 +2,7 @@
 const operationViews=new Map();
 const universalStages=[['queued','Queued'],['inspect','Inspect release'],['core_write','Download & write core'],['core_verify','Verify core'],['application_download','Download application'],['application_verify','Verify & stage application'],['pair','Pair components'],['install','Restart & install'],['complete','Confirm healthy']];
 function operationView(id){if(!operationViews.has(id))operationViews.set(id,{query:'',outcome:'all',stage:'all',page:0,size:25,selected:''});return operationViews.get(id);}
-function operationOutcome(status){return status==='complete'?'complete':status==='failed'?'failed':status==='cancelled'?'cancelled':status==='queued'?'queued':['staged','scheduled'].includes(status)?'waiting':'running';}
+function operationOutcome(status){return status==='complete'?'complete':['failed','interrupted'].includes(status)?'failed':status==='cancelled'?'cancelled':status==='queued'?'queued':['staged','scheduled'].includes(status)?'waiting':'running';}
 function deploymentStage(result,type){
  if(['complete','cancelled'].includes(result.status))return result.status;
  if(result.status==='queued')return 'queued';
@@ -19,7 +19,7 @@ function deploymentRows(deployment){
  return deployment.targets.map(id=>{const result=deployment.results?.[id]||{status:'queued',detail:'Waiting to start'},device=devices.get(id),stage=deploymentStage(result,type);
   return {id,host:device?.host||id,description:device?.description||'',status:result.status,detail:result.detail||'',stage,
    percent:typeof result.update_percent==='number'&&Number.isFinite(result.update_percent)&&result.update_percent>=0&&result.update_percent<=100&&stage===result.update_phase&&!['install','complete','cancelled','ready'].includes(stage)?result.update_percent:null,
-   updated:result.updated_at,completed:result.update_milestones||[],controls:updateCancelDeviceBadge(deployment,id),error:updateCancelError(deployment,id)};
+   updated:result.updated_at,completed:result.update_milestones||[],controls:updateCancelDeviceBadge(deployment,id,device),error:updateCancelError(deployment,id)};
  });
 }
 function profileFlow(deployment){
@@ -60,17 +60,21 @@ if(typeof renderDeployments==='function'){
  renderDeployments=function(){preserveOperationFocus(actionRenderDeployments);};
 }
 
+function singleActionPercent(labels,job){
+ const measured=job.percent;
+ return job.status==='running'&&/write|transfer|verify|stage application/i.test(labels[job.stage]||'')&&typeof measured==='number'&&Number.isFinite(measured)&&measured>=0&&measured<=100?measured:null;
+}
 function singleActionFlow(labels,job){
  const failed=['failed','interrupted'].includes(job.status),counts=labels.map((label,index)=>job.stage>index?1:0),active=labels.map((label,index)=>index===job.stage&&!failed&&job.status!=='complete'?1:0),failures=labels.map((label,index)=>index===job.stage&&failed?1:0);
- const measured=Number(job.percent),label=labels[job.stage]||'';
- return milestoneFlow(labels,counts,1,failed,active,failures)+(active[job.stage]&&/write|transfer|verify|stage application/i.test(label)&&Number.isFinite(measured)&&measured>=0&&measured<=100?`<p class="muted">${esc(label)}: ${measured}% of this stage</p>`:'');
+ const measured=singleActionPercent(labels,job),label=labels[job.stage]||'';
+ return milestoneFlow(labels,counts,1,failed,active,failures)+(measured!==null?`<p class="muted">${esc(label)}: ${measured}% of this stage</p>`:'');
 }
 let displayedUSBJobs=[];
 function renderUSBProgress(jobs){
  if(jobs!==undefined)displayedUSBJobs=jobs;
  const box=document.getElementById('seed-progress');if(!box)return;
- const stages=new Map(),rows=displayedUSBJobs.map(job=>{const labels=usbActionLabels(job),label=labels[job.stage]||'Prepared',stage='usb:'+label;stages.set(stage,label);return {id:job.id,host:job.image||'Browser USB',description:job.kind==='recovery'?'Clean USB recovery':'USB seed',status:job.status,stage,percent:null,detail:job.detail||'',updated:job.updated_at,completed:labels.slice(0,job.stage)};});
- const selected=operationView('usb-batch').selected,job=displayedUSBJobs.find(item=>item.id===selected)||displayedUSBJobs[0];
+ const stages=new Map(),rows=displayedUSBJobs.map(job=>{const labels=usbActionLabels(job),label=labels[job.stage]||'Prepared',stage='usb:'+label;stages.set(stage,label);return {id:String(job.id),host:job.image||'Browser USB',description:job.kind==='recovery'?'Clean USB recovery':'USB seed',status:job.status,stage,percent:singleActionPercent(labels,job),detail:job.detail||'',updated:job.updated_at,completed:labels.slice(0,job.stage)};});
+ const selected=operationView('usb-batch').selected,job=displayedUSBJobs.find(item=>String(item.id)===selected)||displayedUSBJobs[0];
  preserveOperationFocus(()=>{box.innerHTML=rows.length?`<article class="card deployment">${operationSummary(rows,'prepared')}${job?`<h3>${esc(job.image)}</h3>${seedFlow(job)}<p class="muted">${esc(job.detail)}</p>`:''}${operationTable('usb-batch',rows,[...stages])}</article>`:'';});
 }
 
@@ -85,14 +89,15 @@ async function readBackupJobs(ids){
  return jobs;
 }
 async function trackedBackupJobs(data){
- const ids=backupState.pending?.jobIds||((data.active_jobs||[]).some(job=>!displayedBackupJobs.some(previous=>previous.id===job.id))?(data.active_jobs||[]).map(job=>job.id):displayedBackupJobs.map(job=>job.id));
+ const known=new Set(displayedBackupJobs.map(job=>String(job.id))),active=data.active_jobs||[];
+ const ids=backupState.pending?.jobIds||(active.some(job=>!known.has(String(job.id)))?active.map(job=>job.id):displayedBackupJobs.map(job=>job.id));
  return ids.length?readBackupJobs(ids):data.active_jobs||[];
 }
 function renderBackupProgress(jobs){
  if(jobs!==undefined){const previous=new Map(displayedBackupJobs.map(job=>[String(job.id),job]));displayedBackupJobs=jobs.map(job=>{const old=previous.get(String(job.id));return old&&(Number(old.updated_at)>Number(job.updated_at)||['complete','failed','cancelled'].includes(old.status))?old:job;});}
  const box=document.getElementById('backup-progress'),section=document.getElementById('backup-operations'),list=document.getElementById('backup-active-list');if(!box||!section||!list)return;
  if(!displayedBackupJobs.length){section.classList.add('hidden');box.innerHTML='';list.innerHTML='';return;}
- const devices=new Map(state.devices.map(device=>[device.id,device])),rows=displayedBackupJobs.map(job=>({id:job.id,host:devices.get(job.target)?.host||job.target,description:devices.get(job.target)?.description||'',status:job.status,stage:job.status==='complete'?'stored':job.status==='queued'?'queued':'backup',percent:null,detail:job.last_error||`${job.payload?.source||'manual'} encrypted backup`,updated:job.updated_at,completed:job.status==='complete'?['queued','backup','stored']:['queued']})),total=rows.length,complete=rows.filter(row=>row.status==='complete').length,running=rows.filter(row=>operationOutcome(row.status)==='running').length,errors=rows.filter(row=>row.status==='failed').length;
+ const devices=new Map(state.devices.map(device=>[device.id,device])),rows=displayedBackupJobs.map(job=>({id:String(job.id),host:devices.get(job.target)?.host||job.target,description:devices.get(job.target)?.description||'',status:job.status,stage:job.status==='complete'?'stored':job.status==='queued'?'queued':'backup',percent:null,detail:job.last_error||`${job.payload?.source||'manual'} encrypted backup`,updated:job.updated_at,completed:job.status==='complete'?['queued','backup','stored']:['queued']})),total=rows.length,complete=rows.filter(row=>row.status==='complete').length,running=rows.filter(row=>operationOutcome(row.status)==='running').length,errors=rows.filter(row=>row.status==='failed').length;
  section.classList.remove('hidden');preserveOperationFocus(()=>{box.innerHTML=operationSummary(rows,'backed up')+milestoneFlow(['Queued','Backing up','Stored'],[total,complete,complete],total,errors>0,[0,running,0],[0,errors,0],{id:'backup-batch',names:['queued','backup','stored']});list.innerHTML=operationTable('backup-batch',rows,[['queued','Queued'],['backup','Backing up'],['stored','Stored']]);});
 }
 async function restoreBackup(button){
