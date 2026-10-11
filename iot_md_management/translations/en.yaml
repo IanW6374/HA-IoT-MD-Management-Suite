@@ -11,6 +11,15 @@ configuration:
   request_timeout_s:
     name: Device request timeout
     description: Maximum seconds allowed for a Device API request.
+  device_worker_limit:
+    name: Maximum concurrent device handlers
+    description: Bounds scheduled device work and API requests. Half the handlers are reserved for live progress; slow background work cannot consume them.
+  progress_interval_s:
+    name: Live progress interval
+    description: Seconds between successful progress reads during active actions. Unreachable devices use bounded exponential backoff.
+  progress_timeout_s:
+    name: Live progress read budget
+    description: Total seconds for a progress read, including waiting for a busy device and confirmation reads. Mutation requests are never abandoned and replayed.
   device_api_ca_path:
     name: Device API CA path
     description: CA bundle in /ssl used to verify every managed IoT-MD Device API.

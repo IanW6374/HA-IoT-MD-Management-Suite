@@ -33,6 +33,32 @@ test('100-target batch has bounded rows and separate outcomes, not a made-up ove
   assert.equal(ring.style.getPropertyValue('--ring-failed-end'),'80%');
  }finally{dom.window.close();}
 });
+test('live-read freshness reports stale/retrying data without inventing completion',()=>{
+ const {w,doc}=fixture(3);try{
+  const now=Math.floor(Date.now()/1000);
+  const target=w.deployment.results['device-1'];target.status='staging';target.progress_poll={last_received:now-20,stale_after_s:15,duration_ms:81,error:''};
+  w.renderDeployments();
+  const node=doc.querySelector('.operation-freshness');assert.ok(node);
+  assert.match(node.textContent,/Updated 20s ago — stale/);assert.ok(node.classList.contains('warn'));
+  target.progress_poll.error='TLS handshake timed out <img src=x>';
+  w.renderDeployments();
+  assert.match(doc.querySelector('.operation-freshness').textContent,/retrying/);
+  assert.equal(doc.querySelector('.operation-freshness').title,'TLS handshake timed out <img src=x>');
+  assert.equal(doc.querySelector('img'),null);
+  target.status='complete';w.renderDeployments();assert.equal(doc.querySelector('.operation-freshness'),null);
+ }finally{w.close();}
+});
+test('freshness ages in place without replacing the focused device filter',()=>{
+ const {w,doc}=fixture(3);try{
+  const now=Math.floor(Date.now()/1000);w.Date.now=()=>now*1000;
+  const target=w.deployment.results['device-1'];target.status='staging';target.progress_poll={last_received:now-2,stale_after_s:15};
+  w.renderDeployments();
+  const node=doc.querySelector('.operation-freshness'),input=doc.querySelector('[data-operation-field="query"]');input.focus();
+  w.Date.now=()=>(now+30)*1000;w.refreshProgressFreshness();
+  assert.equal(doc.querySelector('.operation-freshness'),node);assert.equal(doc.activeElement,input);
+  assert.match(node.textContent,/Updated 32s ago — stale/);
+ }finally{w.close();}
+});
 test('shared ring styles use proportional state colours without extra label rows',()=>{
  const {w,doc}=fixture(3);try{
   w.deployment.results['device-1']={status:'staging',update_phase:'core_write',update_milestones:['queued','inspect']};

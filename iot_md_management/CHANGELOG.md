@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.2.7 - 2026-10-11
+
+- Replace competing fixed poll/action loops with bounded per-device admission.
+  Expose a 2–32 handler limit in HA configuration (default 8), reserving half
+  the capacity for live progress and keeping background reads fair during batches.
+- Read live inventory separately from full configuration/health/event polls;
+  defer bulk polls for updating devices. Bound read workflows, including lock,
+  capacity and response-body waits; back off failed live reads up to 60 seconds.
+- Require fresh health and dispatched-version evidence for installation
+  confirmation. Read matching cancellation acknowledgements without replaying
+  writes; preserve durable mutation sequencing and terminal-state protection.
+- Show per-device live-data age/stale/retry hints and add cached scheduler
+  diagnostics. Keep all active deployments visible regardless of history length.
+  Avoid unchanged table renders and history rebuilds for ongoing progress.
+- Batch coalesced fleet poll admission into one durable transaction and skip
+  unchanged target-state writes; retain SQLite FULL durability and mutation journals.
+- Add offline 50/100-device saturation, unreachable-device, deadline, fairness,
+  cancellation and UI freshness coverage. No connected devices are changed.
+
 ## 3.2.6 - 2026-10-11
 
 - Show proportional milestone ring segments for the full target count: green

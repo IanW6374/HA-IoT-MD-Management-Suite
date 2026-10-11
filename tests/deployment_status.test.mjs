@@ -10,15 +10,34 @@ const source=fs.readFileSync(new URL('../iot_md_management/rootfs/app/assets/dep
 const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
 const job=(revision,status)=>({id:'job',revision,status,targets:['one'],results:{one:{status}}});
 function fixture(api,initial=[]) {
-  const errors=[],cleared=[],listeners={};let renders=0;
+  const errors=[],cleared=[],listeners={};let renders=0,historyRenders=0,freshnessRenders=0;
   const context=vm.createContext({state:{deployments:initial},api,
-    renderMetrics(){},renderDeployments(){renders++},renderActionHistory(){},reconcileUpdateCancellations(){},
+    renderMetrics(){},renderDeployments(){renders++},renderActionHistory(){historyRenders++},refreshProgressFreshness(){freshnessRenders++},reconcileUpdateCancellations(){},
     showWorkspaceError:(...args)=>errors.push(args),clearWorkspaceError:message=>cleared.push(message),
     document:{hidden:false,getElementById:()=>null,addEventListener:(name,fn)=>listeners[name]=fn},
     window:{addEventListener:(name,fn)=>listeners[name]=fn}});
   vm.runInContext(source,context);
-  return {context,errors,cleared,listeners,renders:()=>renders};
+  return {context,errors,cleared,listeners,renders:()=>renders,historyRenders:()=>historyRenders,freshnessRenders:()=>freshnessRenders};
 }
+
+test('unchanged reads age freshness without rebuilding active tables or history',async()=>{
+  const f=fixture(async()=>({deployments:[job(1,'active')]}),[job(1,'active')]);
+  await vm.runInContext('refreshDeploymentProgress()',f.context);
+  assert.equal(f.renders(),0);assert.equal(f.historyRenders(),0);assert.equal(f.freshnessRenders(),1);
+  f.context.api=async()=>({deployments:[job(2,'active')]});
+  await vm.runInContext('refreshDeploymentProgress()',f.context);
+  assert.equal(f.renders(),1);assert.equal(f.historyRenders(),0);
+  f.context.api=async()=>({deployments:[job(3,'complete')]});
+  await vm.runInContext('refreshDeploymentProgress()',f.context);
+  assert.equal(f.renders(),2);assert.equal(f.historyRenders(),1);
+});
+
+test('unchanged historical records are not repainted on each live progress read',async()=>{
+  const history=job(5,'complete');history.id='past';
+  const f=fixture(async()=>({deployments:[history,job(2,'active')]}),[history,job(1,'active')]);
+  await vm.runInContext('refreshDeploymentProgress()',f.context);
+  assert.equal(f.renders(),1);assert.equal(f.historyRenders(),0);
+});
 
 test('a read started before cancellation cannot rewind its acknowledged result',async()=>{
   let resolve,calls=0;

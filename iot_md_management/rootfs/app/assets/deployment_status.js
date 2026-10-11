@@ -7,9 +7,11 @@ function applyDeploymentSnapshot(incoming) {
   if(Number(incoming.revision||0)<Number(state.deployments[index].revision||0))return;
   state.deployments[index]=incoming;
 }
-function renderDeploymentStatus() {
+function renderDeploymentStatus(historyChanged=true,liveChanged=true) {
   reconcileUpdateCancellations();
-  renderMetrics();renderDeployments();renderActionHistory();
+  if(liveChanged||historyChanged)renderMetrics();
+  if(liveChanged)renderDeployments();else if(typeof refreshProgressFreshness==='function')refreshProgressFreshness();
+  if(historyChanged)renderActionHistory();
   if(trackedDeploymentId){
     const tracked=state.deployments.find(item=>item.id===trackedDeploymentId);
     if(tracked&&['complete','failed','partial','staged','cancelled'].includes(tracked.status)){
@@ -30,8 +32,13 @@ async function refreshDeploymentProgress() {
         if(!Array.isArray(result?.deployments))throw Error('Invalid deployment status response');
         if(epoch!==deploymentMutationEpoch)continue;
         const known=new Map(state.deployments.map(item=>[item.id,item]));
-        state.deployments=result.deployments.map(item=>Number(item.revision||0)<Number(known.get(item.id)?.revision||0)?known.get(item.id):item);
-        renderDeploymentStatus();clearWorkspaceError('Update status could not be refreshed');
+        const terminal=item=>['complete','failed','partial','staged','cancelled'].includes(item.status);
+        const incoming=result.deployments.map(item=>Number(item.revision||0)<Number(known.get(item.id)?.revision||0)?known.get(item.id):item);
+        const historyKey=items=>JSON.stringify(items.filter(terminal).map(item=>[item.id,item.revision||0,item.status]));
+        const liveKey=items=>JSON.stringify(items.filter(item=>!terminal(item)));
+        const historyChanged=historyKey(incoming)!==historyKey(state.deployments),liveChanged=liveKey(incoming)!==liveKey(state.deployments);
+        state.deployments=incoming;
+        renderDeploymentStatus(historyChanged,liveChanged);clearWorkspaceError('Update status could not be refreshed');
         return result;
       }
       return {deployments:state.deployments};

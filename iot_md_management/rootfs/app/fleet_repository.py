@@ -709,6 +709,15 @@ class FleetRepository:
             ''', (limit,)).fetchall()
         return [self._deployment(row) for row in rows]
 
+    def active_deployments(self):
+        """Live work must not disappear behind a limit on historical records."""
+        with self.lock:
+            rows = self.connection.execute('''
+                SELECT * FROM deployments WHERE status IN ('queued','active')
+                ORDER BY created_at,id
+            ''').fetchall()
+        return [self._deployment(row) for row in rows]
+
     def set_deployment_target(self, identifier, device_id, status, detail='', progress=None,
                               cancellation_refused=False, dispatch=None):
         terminal = {'complete', 'failed', 'staged', 'cancelled'}
@@ -775,6 +784,13 @@ class FleetRepository:
                     and math.isfinite(percent) and 0 <= percent <= 100
                     and status not in ('complete', 'installing', 'cancelled')):
                 deployment['results'][device_id]['update_percent'] = int(percent)
+            # Live-read timestamps are tracked separately. An identical report
+            # is not a new durable state transition or a reason to fsync/repaint.
+            ignored = {'updated_at', 'revision'}
+            if ({key: value for key, value in previous_result.items() if key not in ignored} ==
+                    {key: value for key, value in deployment['results'][device_id].items() if key not in ignored}):
+                deployment['results'][device_id] = previous_result
+                return deployment
             states = [deployment['results'].get(target, {}).get('status', 'queued')
                       for target in deployment['targets']]
             if any(value not in terminal for value in states):
@@ -1014,6 +1030,28 @@ class FleetRepository:
             self._save_rollout(rollout)
             return rollout
 
+    def enqueue_polls(self, identifiers, bucket):
+        """Coalesce a fleet poll cycle in one durable transaction, not N fsyncs."""
+        now = self.now()
+        with self.lock:
+            # The repository connection uses autocommit; its context manager
+            # alone does not begin a transaction for executemany.
+            self.connection.execute('BEGIN IMMEDIATE')
+            try:
+                self.connection.executemany('''
+                    INSERT OR IGNORE INTO jobs(
+                        idempotency_key,kind,target,payload,status,attempts,
+                        not_before,created_at,updated_at,last_error
+                    ) SELECT ?,'poll',?,'{}','queued',0,?,?,?,''
+                    WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='poll' AND
+                        target=? AND status IN ('queued','running'))
+                ''', [(('poll:' + identifier + ':' + str(bucket))[:160], identifier,
+                       now, now, now, identifier) for identifier in identifiers])
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
+
     def enqueue_job(self, kind, target, payload=None, idempotency_key=None,
                     not_before=None):
         now = self.now()
@@ -1101,17 +1139,33 @@ class FleetRepository:
                 WHERE kind='poll' AND status='running'
             ''', (self.now(), self.now())).rowcount
 
-    def claim_job(self, poll_only=None):
+    def job_devices(self, job):
+        if job['kind'] == 'deployment':
+            return {str(job.get('payload', {}).get('device_id', ''))}
+        if job['kind'] == 'rollout':
+            rollout = self.get_rollout(job['target'])
+            if not rollout or rollout['status'] != 'active':
+                return set()
+            group = rollout['cohorts'][rollout['cohort_index']]
+            return {record['id'] for record in self.list_devices()
+                    if record['enabled'] and record['cohort'] == group}
+        return {str(job['target'])}
+
+    def claim_job(self, poll_only=None, exclude_devices=(), prefer_actions=False):
         now = self.now()
         kind_filter = " AND kind='poll'" if poll_only is True else (
             " AND kind<>'poll'" if poll_only is False else ''
         )
         with self.lock, self.connection:
-            row = self.connection.execute('''
+            rows = self.connection.execute('''
                 SELECT * FROM jobs WHERE status='queued' AND not_before<=?
             ''' + kind_filter + '''
-                ORDER BY not_before,id LIMIT 1
-            ''', (now,)).fetchone()
+                ORDER BY ''' + ("CASE WHEN kind='poll' THEN 1 ELSE 0 END," if prefer_actions else '') + '''
+                not_before,id
+            ''', (now,))
+            excluded = set(exclude_devices)
+            row = next((row for row in rows if not
+                        (self.job_devices(self._job(row)) & excluded)), None)
             if row is None:
                 return None
             updated = self.connection.execute('''

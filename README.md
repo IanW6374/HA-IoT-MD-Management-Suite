@@ -38,6 +38,7 @@ reflect the Alpha / Beta / Stable choices managed in HA app configuration.
 The Devices menu health LED combines API and device health across enabled
 devices, including stale or unknown reports. Disabled devices are excluded.
 Select a hostname to open its settings, backup schedule and recovery points.
+
 The description comes from the device when enrollment leaves it blank. Editing
 or clearing it later writes to the enrolled device's configuration API, which
 requires `configuration:write` permission. Saved descriptions are read back
@@ -50,6 +51,40 @@ Port defaults to 8444 and Group defaults to `default`, but both are required
 and can be changed. **Devices > Groups** lists device counts and creates saved
 groups, including empty groups, for the enrolment and device-settings selectors.
 Existing group assignments and device history are preserved.
+
+### Device handlers and live progress
+
+HA app configuration exposes **Maximum concurrent device handlers**
+(`device_worker_limit`), default **8**, configurable from **2 to 32**. Restart
+the add-on after changing it. Half the pool handles dispatch/background jobs;
+the remaining capacity is reserved for live update progress. The scheduler admits
+at most one task per device, skips busy devices rather than queuing behind them,
+and alternates background health reads into large action batches. API transport
+requests, including manual refresh and cancellation, share the configured limit.
+
+Active updates use lightweight inventory reads, with a fresh health read for
+final installation confirmation and a read-only cancellation acknowledgement.
+Full configuration/event polls wait until the update finishes. Profile application
+still requires its full configuration confirmation; partial inventory never
+confirms a profile or marks cached health fresh. Live read-only clients reuse
+discovery/TLS setup, invalidating it after errors or credential/address changes;
+they cannot issue device mutations.
+
+**Live progress interval** defaults to 5 seconds between successful reads;
+**Live progress read budget** defaults to 5 seconds for discovery, lock/capacity
+waits, inventory and any confirmation read together. Reads that fail back off
+exponentially, up to 60 seconds. These are scheduling targets, not a promise that
+every device in a large fleet refreshes every five seconds. Actual cadence depends
+on fleet size, response times and the handler limit. Start with 8 and increase
+only as needed for the HA host and network capacity.
+
+Per-device progress shows its last successful live-read age and a stale/retrying
+hint. `GET /api/scheduler` reports cached worker counts, in-flight durations and
+read/backoff diagnostics without contacting devices. Unchanged progress reads
+do not rebuild tables; ongoing updates do not rebuild the entire action history.
+Offline tests cover 50/100-device fleets, stalled background tasks, unreachable
+devices, read deadlines and no overlapping scheduled tasks. Real-device
+qualification remains necessary; mock timings are not network benchmarks.
 
 ## Profiles and complete backups
 

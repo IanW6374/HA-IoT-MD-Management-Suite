@@ -8,6 +8,10 @@ from unittest import mock
 import urllib.error
 import tempfile
 import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SOURCE = Path(__file__).resolve().parents[1] / 'iot_md_management/rootfs/app/fleet_service.py'
 SPEC = importlib.util.spec_from_file_location('v3_fleet_service', SOURCE)
@@ -28,6 +32,7 @@ class DeviceAPIv3ClientTests(unittest.TestCase):
         with mock.patch.object(SERVICE.ssl, 'create_default_context', return_value=context) as factory, \
              mock.patch.object(context, 'load_default_certs') as roots, \
              mock.patch.object(context, 'load_cert_chain') as identity:
+            self.assertIs(client._context(), context)
             self.assertIs(client._context(), context)
         factory.assert_called_once_with(cafile='/ssl/private-root.pem')
         roots.assert_called_once_with()
@@ -86,6 +91,108 @@ class DeviceAPIv3ClientTests(unittest.TestCase):
             with self.assertRaises(TimeoutError):
                 self.client.request('/api/v3/configuration/restart', 'POST', {})
         self.assertEqual(transport.call_count, 2)
+
+    def test_lock_wait_consumes_budget_and_never_reserves_a_mutation(self):
+        release, held = threading.Event(), threading.Event()
+        def holder():
+            with self.client.request_lock:
+                held.set()
+                release.wait(2)
+        thread = threading.Thread(target=holder)
+        thread.start()
+        self.assertTrue(held.wait(1))
+        self.client.deadline = time.monotonic() + .08
+        self.client.request_recorder = mock.Mock()
+        try:
+            with mock.patch.object(SERVICE.urllib.request, 'urlopen') as transport:
+                with self.assertRaisesRegex(TimeoutError, 'busy'):
+                    self.client.request('/api/v3/configuration/restart', 'POST', {})
+                transport.assert_not_called()
+                self.client.request_recorder.assert_not_called()
+        finally:
+            release.set()
+            thread.join(2)
+
+    def test_capacity_wait_consumes_budget_and_releases_device_lock(self):
+        self.client.request_slots = threading.BoundedSemaphore(1)
+        self.client.request_slots.acquire()
+        self.client.deadline = time.monotonic() + .06
+        with self.assertRaisesRegex(TimeoutError, 'capacity'):
+            self.client.request('/api/v3/device/inventory')
+        self.client.request_slots.release()
+        self.assertTrue(self.client.request_lock.acquire(blocking=False))
+        self.client.request_lock.release()
+
+    def test_metadata_and_inventory_share_one_read_budget(self):
+        timeouts = []
+        def transport(request, **kwargs):
+            timeouts.append(kwargs['timeout'])
+            time.sleep(.03)
+            return response({'api_version': 3})
+        self.client.deadline = time.monotonic() + .3
+        with mock.patch.object(SERVICE.urllib.request, 'urlopen', side_effect=transport):
+            self.client.request('/api/v3/device/inventory')
+        self.assertEqual(len(timeouts), 2)
+        self.assertLess(timeouts[1], timeouts[0] - .02)
+
+    def test_all_device_requests_share_the_transport_limit(self):
+        slots, lock = threading.BoundedSemaphore(2), threading.Lock()
+        running = maximum = 0
+        def transport(*args):
+            nonlocal running, maximum
+            with lock:
+                running += 1
+                maximum = max(maximum, running)
+            try:
+                time.sleep(.02)
+                return {'api_version': 3}
+            finally:
+                with lock:
+                    running -= 1
+        clients = [SERVICE.DeviceClient({'host': f'mock-{index}.local', 'port': 8444},
+            request_slots=slots) for index in range(20)]
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            with mock.patch.object(SERVICE.DeviceClient, '_serial_request', side_effect=transport):
+                results = list(pool.map(lambda client: client.request('/api/v3'), clients))
+        self.assertEqual(len(results), 20)
+        self.assertEqual(maximum, 2)
+
+    def test_slow_success_and_error_bodies_stop_at_the_read_deadline(self):
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_GET(self):
+                body = json.dumps({'api_version': 3, 'error': 'slow response'}).encode()
+                self.send_response(403 if self.path == '/error' else 200)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                try:
+                    for byte in body:
+                        self.wfile.write(bytes([byte]))
+                        self.wfile.flush()
+                        time.sleep(.04)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        real_open = SERVICE.urllib.request.urlopen
+        def local_transport(request, **kwargs):
+            suffix = '/error' if request.full_url.endswith('/error') else '/success'
+            return real_open(f'http://127.0.0.1:{server.server_port}{suffix}', timeout=kwargs['timeout'])
+        try:
+            for suffix in ('success', 'error'):
+                with self.subTest(response=suffix):
+                    started = time.monotonic()
+                    self.client.deadline = started + .2
+                    with mock.patch.object(SERVICE.urllib.request, 'urlopen', side_effect=local_transport):
+                        with self.assertRaises(TimeoutError):
+                            self.client._request('/api/v3/' + suffix)
+                    self.assertLess(time.monotonic() - started, .7)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(2)
 
     def test_operational_response_must_also_be_v3(self):
         with mock.patch.object(SERVICE.urllib.request, 'urlopen', side_effect=[response({'api_version': 3}), response({'api_version': 2})]):

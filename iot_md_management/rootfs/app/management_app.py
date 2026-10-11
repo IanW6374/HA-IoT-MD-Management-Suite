@@ -20,6 +20,7 @@ if str(APP_DIRECTORY) not in sys.path:
 from fleet_repository import FleetRepository
 from fleet_policy import PolicySigner
 from fleet_service import FleetController
+from device_scheduler import DeviceScheduler
 from configuration_profiles import normalize_profile
 from release_catalog import ArtifactVerifier, CatalogSigner, ReleaseCatalog
 from management_portal import HTML as MANAGEMENT_PORTAL_HTML
@@ -123,7 +124,9 @@ RELEASES = ReleaseCatalog(
     OPTIONS.get('github_token', ''),
 )
 CONTROLLER = FleetController(
-    STORE, SIGNER, timeout=int(OPTIONS.get('request_timeout_s', 10)), tls={
+    STORE, SIGNER, timeout=int(OPTIONS.get('request_timeout_s', 10)),
+    worker_limit=int(OPTIONS.get('device_worker_limit', 8)),
+    progress_timeout=int(OPTIONS.get('progress_timeout_s', 5)), tls={
         'ca_path': OPTIONS.get('device_api_ca_path', '/ssl/iot-md-ca.pem'),
         'cert_path': OPTIONS.get(
             'device_api_client_cert_path', '/ssl/iot-md-fleet.pem'
@@ -377,7 +380,20 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/audit':
                 self._json(200, {'audit': STORE.list_audit(500, search)})
             elif path == '/api/deployments':
-                self._json(200, {'deployments': STORE.list_deployments(200)})
+                live = STORE.active_deployments()
+                live_ids = {item['id'] for item in live}
+                deployments = live + [item for item in STORE.list_deployments(200) if item['id'] not in live_ids]
+                deployments.sort(key=lambda item: (item['created_at'], item['id']), reverse=True)
+                observed = CONTROLLER.progress_diagnostics()
+                for deployment in deployments:
+                    for identifier, result in deployment['results'].items():
+                        if identifier in observed:
+                            result['progress_poll'] = {**observed[identifier],
+                                'stale_after_s': max(15, int(OPTIONS.get('progress_interval_s', 5)) * 3)}
+                self._json(200, {'deployments': deployments})
+            elif path == '/api/scheduler':
+                self._json(200, {'scheduler': SCHEDULER.snapshot() if SCHEDULER else {},
+                    'progress_reads': CONTROLLER.progress_diagnostics()})
             elif path == '/api/rollouts':
                 self._json(200, {'rollouts': STORE.list_rollouts()})
             elif path == '/api/profiles':
@@ -623,59 +639,39 @@ class Handler(BaseHTTPRequestHandler):
         print('%s - %s' % (self.address_string(), pattern % args), flush=True)
 
 
-def poll_loop():
-    interval = max(10, int(OPTIONS.get('poll_interval_s', 60)))
-    while True:
-        active = any(
-            item.get('status') in ('queued', 'active')
-            for item in STORE.list_deployments()
-        )
-        cadence = 10 if active else interval
-        for identifier in STORE.device_ids(enabled_only=True):
-            STORE.enqueue_job(
-                'poll', identifier, idempotency_key=(
-                    'poll:' + identifier + ':' + str(int(time.time()) // cadence)
-                )
+def execute_job(job):
+    """Execute one admitted durable job with its existing per-kind retry policy."""
+    try:
+        if job['kind'] == 'poll':
+            CONTROLLER.poll_device(job['target'])
+        elif job['kind'] == 'deployment':
+            CONTROLLER.execute_deployment_target(
+                job['target'], job['payload'].get('device_id', '')
             )
-        time.sleep(cadence)
-
-
-def job_loop(poll_only=False):
-    while True:
-        job = STORE.claim_job(poll_only=poll_only)
-        if job is None:
-            time.sleep(1)
-            continue
-        try:
-            if job['kind'] == 'poll':
-                CONTROLLER.poll_device(job['target'])
-            elif job['kind'] == 'deployment':
-                CONTROLLER.execute_deployment_target(
-                    job['target'], job['payload'].get('device_id', '')
-                )
-            elif job['kind'] == 'rollout':
-                CONTROLLER.dispatch_rollout(job['target'])
-            elif job['kind'] == 'backup':
-                settings = device_backup_settings(job['target'])
-                CONTROLLER.create_backup(
-                    job['target'], job['payload'].get('source', 'scheduled'),
-                    int(job['payload'].get('retention', settings['retention']))
-                )
-            else:
-                raise ValueError('unsupported fleet job: ' + str(job['kind']))
-        except Exception as exc:
-            permission_wait = (
-                job['kind'] == 'backup' and
-                'configuration:write' in str(exc)
-            )
-            STORE.fail_job(
-                job['id'], exc, maximum_attempts=20 if permission_wait else 5,
-                maximum_delay=10 if permission_wait else 3600,
+        elif job['kind'] == 'rollout':
+            CONTROLLER.dispatch_rollout(job['target'])
+        elif job['kind'] == 'backup':
+            settings = device_backup_settings(job['target'])
+            CONTROLLER.create_backup(
+                job['target'], job['payload'].get('source', 'scheduled'),
+                int(job['payload'].get('retention', settings['retention']))
             )
         else:
-            STORE.complete_job(job['id'])
+            raise ValueError('unsupported fleet job: ' + str(job['kind']))
+    except Exception as exc:
+        permission_wait = (
+            job['kind'] == 'backup' and
+            'configuration:write' in str(exc)
+        )
+        STORE.fail_job(
+            job['id'], exc, maximum_attempts=20 if permission_wait else 5,
+            maximum_delay=10 if permission_wait else 3600,
+        )
+    else:
+        STORE.complete_job(job['id'])
 
 
+SCHEDULER = None
 RELEASE_SYNC_LOCK = threading.Lock()
 RELEASE_SYNC_STATE = {
     'enabled': bool(OPTIONS.get('github_sync_enabled', False)),
@@ -773,13 +769,13 @@ def release_sync_loop():
 
 
 def main():
+    global SCHEDULER
     STORE.recover_poll_jobs()
-    threading.Thread(target=poll_loop, daemon=True).start()
-    threading.Thread(target=job_loop, args=(False,), daemon=True).start()
-    # A rebooting/slow device must not hold up every other device's progress.
-    # Polls stay coalesced per device; mutations keep their separate worker.
-    for _ in range(4):
-        threading.Thread(target=job_loop, args=(True,), daemon=True).start()
+    SCHEDULER = DeviceScheduler(STORE, CONTROLLER, execute_job,
+        workers=OPTIONS.get('device_worker_limit', 8),
+        progress_interval=OPTIONS.get('progress_interval_s', 5),
+        poll_interval=OPTIONS.get('poll_interval_s', 60))
+    threading.Thread(target=SCHEDULER.run, daemon=True).start()
     threading.Thread(target=backup_schedule_loop, daemon=True).start()
     if RELEASE_SYNC_STATE['enabled']:
         threading.Thread(target=release_sync_loop, daemon=True).start()

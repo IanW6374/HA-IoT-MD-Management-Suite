@@ -30,8 +30,12 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 3.2.6', addon)
+        self.assertIn('version: 3.2.7', addon)
         self.assertIn('request_timeout_s: 30', addon)
+        self.assertIn('device_worker_limit: 8', addon)
+        self.assertIn('device_worker_limit: int(2,32)', addon)
+        self.assertIn('progress_interval_s: 5', addon)
+        self.assertIn('progress_timeout_s: 5', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
         self.assertIn('github_sync_enabled: false', addon)
@@ -45,6 +49,28 @@ class FleetAddonTests(unittest.TestCase):
         self.assertTrue((root / 'iot_md_management/translations/en.yaml').is_file())
         nginx = (root / 'iot_md_management/rootfs/etc/nginx/nginx.conf.template').read_text()
         self.assertIn('(latest|versions)[.]json', nginx)
+
+    def test_progress_and_scheduler_routes_only_read_cached_state(self):
+        store = self.module.STORE
+        store.register({'id': 'progress-device', 'host': 'progress-device.local'})
+        deployment = store.create_deployment({'update': {'release_sequence': 2821,
+            'release_type': 'universal'}}, ['progress-device'])
+        self.module.CONTROLLER._progress_reads['progress-device'] = {
+            'last_received': 100, 'last_attempt': 101, 'error': 'Read timed out', 'duration_ms': 5000}
+        handler = object.__new__(self.module.Handler)
+        handler._json = mock.Mock()
+        with mock.patch.object(self.module.CONTROLLER, '_client') as transport:
+            handler.path = '/api/deployments'
+            handler.do_GET()
+            status, data = handler._json.call_args.args
+            self.assertEqual(status, 200)
+            result = next(item for item in data['deployments'] if item['id'] == deployment['id'])['results']['progress-device']
+            self.assertEqual(result['progress_poll']['last_received'], 100)
+            self.assertEqual(result['progress_poll']['stale_after_s'], 15)
+            handler.path = '/api/scheduler'
+            handler.do_GET()
+            self.assertIn('progress_reads', handler._json.call_args.args[1])
+            transport.assert_not_called()
 
     def test_ingress_uses_shared_iot_brand_shell(self):
         self.assertIn('<header class="topbar">', self.module.HTML)
@@ -2295,11 +2321,14 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         with mock.patch.object(self.module.threading, 'Thread') as thread, \
                 mock.patch.object(self.module, 'ThreadingHTTPServer'):
             self.module.main()
+        self.addCleanup(self.module.SCHEDULER.close)
         workers = [call.kwargs for call in thread.call_args_list
-                   if call.kwargs.get('target') is self.module.job_loop]
-        self.assertEqual(len(workers), 5)
-        self.assertEqual(sum(worker['args'] == (True,) for worker in workers), 4)
-        self.assertEqual(sum(worker['args'] == (False,) for worker in workers), 1)
+                   if call.kwargs.get('target') == self.module.SCHEDULER.run]
+        self.assertEqual(len(workers), 1)
+        snapshot = self.module.SCHEDULER.snapshot()
+        self.assertEqual(snapshot['worker_limit'], 8)
+        self.assertEqual(snapshot['background_limit'], 4)
+        self.assertEqual(snapshot['progress_limit'], 4)
 
     def test_parallel_polls_keep_another_device_live_while_one_configuration_read_stalls(self):
         import threading
