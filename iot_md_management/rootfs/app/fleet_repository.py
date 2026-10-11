@@ -1,6 +1,7 @@
 """Transactional SQLite repositories and durable jobs for IoT MD fleet state."""
 
 import json
+import math
 import sqlite3
 import threading
 import time
@@ -765,6 +766,15 @@ class FleetRepository:
             deployment['results'][device_id]['update_phase'] = str(
                 (progress or {}).get('phase', previous_result.get('update_phase', ''))
             )[:40]
+            # Percent describes this measured phase, never the whole installation.
+            # Do not carry a completed transfer's percentage into a new phase.
+            percent = (progress or {}).get('percent')
+            if progress is None:
+                percent = previous_result.get('update_percent')
+            if (isinstance(percent, (int, float)) and not isinstance(percent, bool)
+                    and math.isfinite(percent) and 0 <= percent <= 100
+                    and status not in ('complete', 'installing', 'cancelled')):
+                deployment['results'][device_id]['update_percent'] = int(percent)
             states = [deployment['results'].get(target, {}).get('status', 'queued')
                       for target in deployment['targets']]
             if any(value not in terminal for value in states):
@@ -1054,6 +1064,21 @@ class FleetRepository:
                 'SELECT * FROM jobs WHERE id=?', (int(identifier),)
             ).fetchone()
         return self._job(row)
+
+    def get_jobs(self, identifiers):
+        """Read a bounded batch, including terminal jobs, without dispatching work."""
+        identifiers = list(dict.fromkeys(int(value) for value in identifiers))
+        if not identifiers or len(identifiers) > 500 or any(value <= 0 for value in identifiers):
+            raise ValueError('provide between 1 and 500 positive job IDs')
+        with self.lock:
+            rows = self.connection.execute(
+                'SELECT * FROM jobs WHERE id IN (' + ','.join('?' for _ in identifiers) + ')',
+                tuple(identifiers),
+            ).fetchall()
+        jobs = {row['id']: self._job(row) for row in rows}
+        if len(jobs) != len(identifiers):
+            raise ValueError('background job does not exist')
+        return [jobs[identifier] for identifier in identifiers]
 
     def active_jobs(self, kind, target=''):
         query = (

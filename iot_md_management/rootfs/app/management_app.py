@@ -399,6 +399,9 @@ class Handler(BaseHTTPRequestHandler):
                     'items': items,
                     'count': sum(not item['acknowledged'] for item in items),
                 })
+            elif path == '/api/jobs':
+                values = parse_qs(urlparse(self.path).query).get('ids', [''])[0].split(',')
+                self._json(200, {'jobs': STORE.get_jobs(values)})
             elif path.startswith('/api/jobs/'):
                 identifier = path[len('/api/jobs/'):]
                 job = STORE.get_job(int(identifier))

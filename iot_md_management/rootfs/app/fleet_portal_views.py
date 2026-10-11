@@ -25,6 +25,24 @@ def compose(html):
     html = html.replace("['complete','failed','partial','staged']", "['complete','failed','partial','staged','cancelled']")
     html = html.replace("warn=['queued'", "warn=['cancelling','cancelled','queued'")
     html = html.replace('const activePage=', (assets / 'update_cancel.js').read_text() + '\nconst activePage=', 1)
+    # One shared batch/table presentation for every action; keep history immutable.
+    html = '\n'.join(line for line in html.split('\n')
+                     if not line.startswith(('function activeDeploymentCard(', 'function renderBackupProgress(',
+                                             'async function restoreBackup(')))
+    # USB uses the same count/status conventions; never estimate reboot progress.
+    usb_line = next(line for line in html.split('\n') if line.startswith('function seedFlow('))
+    labels_line = usb_line[:usb_line.index(';return `')] + ';return labels}'
+    labels_line = labels_line.replace('function seedFlow(', 'function usbActionLabels(', 1)
+    html = html.replace(usb_line, labels_line + '\nfunction seedFlow(job){return singleActionFlow(usbActionLabels(job),job)}')
+    start = html.index("document.getElementById('seed-progress').innerHTML=jobs.map(")
+    end = html.index(';const focused=', start)
+    html = html[:start] + 'renderUSBProgress(jobs)' + html[end:]
+    html = html.replace('renderBackupProgress(data.active_jobs||[]);renderDeployments();',
+                        'renderBackupProgress(await trackedBackupJobs(data));renderDeployments();')
+    html = html.replace("await Promise.all(identifiers.map(identifier=>api('api/jobs/'+identifier).then(data=>data.job)))",
+                        'await readBackupJobs(identifiers)')
+    html = html.replace('const activePage=', (assets / 'action_progress.js').read_text() + '\nconst activePage=', 1)
+    html = html.replace('</style>', (assets / 'action_progress.css').read_text() + '</style>', 1)
     # Groups and select-all are inside the device picker, not separate modes.
     html = re.sub(
         r'<div class="scope-tabs"><label><input type="radio" name="(?:backup_)?target_scope".*?</div>',

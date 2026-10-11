@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.2.4 - 2026-10-11
+
+- Apply consistent action progress to universal/component/profile deployments,
+  backups, restores and USB seed/recovery. Separate confirmed outcomes from
+  running, queued, waiting, failed and cancelled work; show milestone completion,
+  active and failure counts directly instead of only in hover text.
+- Use searchable, stage/outcome-filtered and paginated device progress tables.
+  Click a milestone to show devices currently at that stage; expand a device for
+  its full error/details. Retain filters, page, disclosure and input focus during
+  automatic refresh. Default to 25 rows for larger fleets.
+- Retain measured per-stage percentages reported by devices, without inventing
+  overall progress or a restart percentage. Keep cancellation badges beside
+  outcomes and existing bounded concurrent cancellation behaviour.
+- Read backup jobs in bounded batches, retaining completed/failed targets in
+  the original denominator. USB results and restore acknowledgement do not
+  claim an unverified successful restart.
+- Test with the signed Alpha 115 universal device release; no device is flashed
+  or reset automatically by this Management release.
+
 ## 3.2.3 - 2026-10-10
 
 - Dispatch Cancel all through four independent workers instead of waiting for

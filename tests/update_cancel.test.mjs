@@ -176,8 +176,10 @@ test('declined confirmation and terminal-only jobs make no cancellation requests
 });
 test('composed live cards place cancellation badges immediately before statuses, including single-device jobs',()=>{
   const html=execFileSync(process.env.PYTHON||'python3',['-c',"import sys;sys.path.insert(0,'iot_md_management/rootfs/app');import management_portal;print(management_portal.HTML)"],{cwd:new URL('..',import.meta.url),encoding:'utf8'});
-  const renderer=html.split('\n').filter(line=>line.startsWith('function deploymentTargets(')||line.startsWith('function activeDeploymentCard(')).join('\n');
+  const renderer=fs.readFileSync(new URL('../iot_md_management/rootfs/app/assets/action_progress.js',import.meta.url),'utf8').split("if(typeof renderDeployments==='function')")[0];
   const context=fixture();context.statusBadge=status=>`<span class="badge">${status}</span>`;
+  context.when=()=>'';
+  context.milestoneFlow=()=>'<div class="flow"></div>';
   context.activationLabel=()=> 'Install now';context.releaseFlowSummary=()=> '';context.flowFor=()=> '<div class="flow"></div>';
   vm.runInContext(renderer,context);
   for(const multiple of [false,true]){

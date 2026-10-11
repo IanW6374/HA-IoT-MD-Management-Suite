@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 3.2.3', addon)
+        self.assertIn('version: 3.2.4', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -440,7 +440,8 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
 
     def test_deployment_history_keeps_progress_only_for_in_flight_work(self):
         self.assertIn('function activeDeploymentCard(deployment)', self.module.HTML)
-        self.assertIn('${flowFor(deployment)}${deviceResults}', self.module.HTML)
+        self.assertIn('${update.version?flowFor(deployment):profileFlow(deployment)}<details data-default-open', self.module.HTML)
+        self.assertIn('${operationTable(deployment.id,rows,stages)}', self.module.HTML)
         self.assertIn('id="inflight-empty"', self.module.HTML)
         self.assertIn("deploymentSection?.classList.toggle('hidden',!active.length)", self.module.HTML)
         self.assertIn("emptySection?.classList.toggle('hidden',!!active.length||!!backupCount)", self.module.HTML)
@@ -2069,6 +2070,37 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
     def test_device_editor_does_not_expose_a_management_name(self):
         self.assertNotIn('<label>Name<input name="name" value="${esc(device.name)}"', self.module.HTML)
 
+    def test_measured_stage_percent_is_durable_bounded_and_not_reused(self):
+        store = self.module.FleetStore(Path(self.temp.name) / 'stage-percent.db')
+        self.addCleanup(store.close)
+        deployment = store.create_deployment({'update': {'release_type': 'universal', 'release_sequence': 2820}}, ['one'])
+        for percent in (12.7, 100):
+            store.set_deployment_target(deployment['id'], 'one', 'staging', progress={'phase': 'core_write', 'percent': percent})
+            self.assertEqual(store.get_deployment(deployment['id'])['results']['one']['update_percent'], int(percent))
+        store.set_deployment_target(deployment['id'], 'one', 'staging', progress={'phase': 'core_verify'})
+        self.assertNotIn('update_percent', store.get_deployment(deployment['id'])['results']['one'])
+        for percent in (-1, 101, float('nan'), float('inf'), True, '30'):
+            store.set_deployment_target(deployment['id'], 'one', 'staging', progress={'phase': 'core_verify', 'percent': percent})
+            self.assertNotIn('update_percent', store.get_deployment(deployment['id'])['results']['one'])
+        store.set_deployment_target(deployment['id'], 'one', 'installing', progress={'phase': 'install', 'percent': 100})
+        self.assertNotIn('update_percent', store.get_deployment(deployment['id'])['results']['one'])
+
+    def test_bounded_job_batch_includes_completed_and_failed_jobs(self):
+        store = self.module.FleetStore(Path(self.temp.name) / 'batch-jobs.db')
+        self.addCleanup(store.close)
+        jobs = [store.enqueue_job('backup', target, {'source': 'manual'}) for target in ('one', 'two', 'three')]
+        store.complete_job(jobs[0]['id'])
+        store.claim_job()
+        store.fail_job(jobs[1]['id'], 'Transport failed', maximum_attempts=1)
+        ids = [job['id'] for job in jobs]
+        rows = store.get_jobs(list(reversed(ids)))
+        self.assertEqual([row['id'] for row in rows], list(reversed(ids)))
+        self.assertEqual([row['status'] for row in rows], ['queued', 'failed', 'complete'])
+        self.assertEqual(len(store.active_jobs('backup')), 1)
+        for invalid in ([], [0], [-1], ['no'], list(range(1, 502)), [99999]):
+            with self.assertRaises(ValueError):
+                store.get_jobs(invalid)
+
     def test_install_now_connection_loss_does_not_imply_staging_completed(self):
         from fleet_service import FleetController
 
@@ -2512,7 +2544,8 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertIn('<th>Current configuration</th>', self.module.HTML)
         self.assertIn('<th>Backup configuration</th>', self.module.HTML)
         self.assertIn("rows.filter(row=>row.state!=='same').length", self.module.HTML)
-        self.assertIn('function renderBackupProgress(jobs=[]){', self.module.HTML)
+        self.assertIn('function renderBackupProgress(jobs){', self.module.HTML)
+        self.assertIn('renderBackupProgress(await trackedBackupJobs(data))', self.module.HTML)
         self.assertIn("milestoneFlow(['Queued','Backing up','Stored']", self.module.HTML)
         self.assertIn('renderBackupProgress(jobs)', self.module.HTML)
         self.assertNotIn('change(s) will be applied', self.module.HTML)
