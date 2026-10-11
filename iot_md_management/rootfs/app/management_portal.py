@@ -32,10 +32,10 @@ function milestoneFlow(labels,counts,total,failed=false){
  total=Math.max(Number(total)||0,1);const active=arguments[4]||[],failures=arguments[5]||[],filter=arguments[6];
  return `<div class="flow fleet-flow" style="--flow-columns:${labels.length}">${labels.map((label,index)=>{
   const count=Math.min(total,Math.max(0,Number(counts[index])||0)),percent=Math.round(count/total*100),done=count===total,running=Number(active[index])||0,errors=Number(failures[index])||0;
-  const tone=done?'done':`${count>0?'partial ':''}${running?'current ':''}${errors?'failed':''}`.trim();
+  const tone=done?'done':`${count>0?'partial ':''}${running?'current ':''}${errors?'failed':''}`.trim(),state=errors?'Failed':running?'Active':done?'Complete':'Not running';
   const description=`${count} of ${total} devices completed this milestone (${percent}%)${running?`; ${running} in progress`:''}${errors?`; ${errors} failed here`:''}`;
-  const control=`<span class="flow-ring" style="--milestone-progress:${percent}%"><b>${done?'✓':`${count}/${total}`}</b></span><strong>${esc(label)}</strong>`;
-  return `<div class="flow-step fleet-flow-step ${tone}" title="${esc(description)}">${filter?`<button class="milestone-filter" type="button" data-operation="${esc(filter.id)}" data-stage="${esc(filter.names[index])}" aria-label="Show devices currently at ${esc(label)}" onclick="filterOperationStage(this)">${control}</button>`:control}<small class="milestone-counts">${count}/${total} complete</small>${running?`<small class="milestone-running">${running} running</small>`:''}${errors?`<small class="milestone-errors">${errors} failed here</small>`:''}</div>`;
+  const control=`<span class="flow-ring" role="img" aria-label="${state}: ${esc(description)}" style="--milestone-progress:${percent}%"><b>${done?'✓':`${count}/${total}`}</b></span><strong>${esc(label)}</strong>`;
+  return `<div class="flow-step fleet-flow-step ${tone}" title="${state}: ${esc(description)}" data-milestone-state="${state}">${filter?`<button class="milestone-filter" type="button" data-operation="${esc(filter.id)}" data-stage="${esc(filter.names[index])}" aria-label="${state}: ${esc(description)}. Show devices currently at ${esc(label)}" onclick="filterOperationStage(this)">${control}</button>`:control}</div>`;
  }).join('')}</div>`;
 }
 function milestoneActivity(results,completed,names){

@@ -6,6 +6,7 @@ const require=createRequire(import.meta.url);
 const {JSDOM}=require(process.env.IOT_UI_NODE_MODULES?`${process.env.IOT_UI_NODE_MODULES}/jsdom`:'jsdom');
 const portal=fs.readFileSync(new URL('../iot_md_management/rootfs/app/management_portal.py',import.meta.url),'utf8');
 const actions=fs.readFileSync(new URL('../iot_md_management/rootfs/app/assets/action_progress.js',import.meta.url),'utf8');
+const progressCSS=fs.readFileSync(new URL('../iot_md_management/rootfs/app/assets/action_progress.css',import.meta.url),'utf8');
 const flows=portal.slice(portal.indexOf('function milestoneFlow('),portal.indexOf('function deploymentTargets('));
 function fixture(count=100,type='universal'){
  const dom=new JSDOM('<main id="deployments"></main><section id="backup-operations"><div id="backup-progress"></div><div id="backup-active-list"></div></section><div id="seed-progress"></div>',{runScripts:'outside-only'}),w=dom.window;
@@ -23,9 +24,25 @@ test('100-target batch has bounded rows and separate outcomes, not a made-up ove
   assert.equal(doc.querySelectorAll('.operation-device-row').length,25);
   assert.match(doc.querySelector('.batch-summary').textContent,/10 of 100 installed.*60 in progress.*10 queued.*10 failed.*10 cancelled/);
   assert.match(doc.querySelector('.operation-pager').textContent,/1–25 of 100/);
-  assert.ok(doc.querySelectorAll('.milestone-running').length);
+  assert.ok(doc.querySelectorAll('[data-milestone-state="Failed"]').length);
+  assert.equal(doc.querySelectorAll('.milestone-counts,.milestone-running,.milestone-errors').length,0);
+  assert.match(doc.querySelector('[data-milestone-state="Failed"] .flow-ring').getAttribute('aria-label'),/60 in progress.*10 failed here/);
   assert.doesNotMatch(doc.querySelector('.batch-summary').textContent,/%/);
  }finally{dom.window.close();}
+});
+test('shared ring styles distinguish pending, active, failed and complete without extra label rows',()=>{
+ const {w,doc}=fixture(3);try{
+  w.deployment.results['device-1']={status:'staging',update_phase:'core_write',update_milestones:['queued','inspect']};
+  w.deployment.results['device-2']={status:'failed',update_phase:'application_verify',update_milestones:['queued','inspect']};
+  w.renderDeployments();
+  const style=doc.createElement('style');style.textContent=progressCSS;doc.head.append(style);
+  for(const [state,tone] of [['Not running','line'],['Active','warn'],['Failed','bad'],['Complete','good']]){
+   const step=doc.querySelector(`[data-milestone-state="${state}"]`);assert.ok(step,state);
+   assert.equal(w.getComputedStyle(step).getPropertyValue('--ring-tone'),`var(--${tone})`);
+   assert.equal(w.getComputedStyle(step.querySelector('strong')).minHeight,'44.8px');
+   assert.match(step.title,new RegExp(`^${state}:`));
+  }
+ }finally{w.close();}
 });
 test('milestone filters current work rather than devices which already passed it',()=>{
  const {dom,w,doc}=fixture();try{

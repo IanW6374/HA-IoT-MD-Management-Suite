@@ -366,6 +366,13 @@ class FleetController:
         client = self._client(record)
         try:
             inventory = client.request('/api/v3/device/inventory')
+            # Publish observed transfer/staging boundaries before slower health,
+            # configuration or log reads. This is not installation confirmation
+            # and does not mark cached health/last-seen data fresh.
+            self._reconcile_deployments(identifier, {
+                **record, 'inventory': inventory,
+                'fleet': inventory.get('fleet') or {},
+            }, progress_only=True)
             configuration = client.request('/api/v3/configuration')
             if (configuration.get('configuration') or {}).get(
                 'network_trial_confirmation_ready'
@@ -468,7 +475,7 @@ class FleetController:
                     'Device unavailable; waiting to confirm the installed version'
                 )
 
-    def _reconcile_deployments(self, identifier, record):
+    def _reconcile_deployments(self, identifier, record, progress_only=False):
         if not hasattr(self.store, 'list_deployments'):
             return
         fleet = record.get('fleet') or {}
@@ -477,6 +484,8 @@ class FleetController:
                 continue
             current = deployment['results'].get(identifier, {}).get('status', '')
             if current == 'cancelling':
+                if progress_only:
+                    continue
                 if self._deployment_update_completed(deployment, identifier, record):
                     self.store.set_deployment_target(deployment['id'], identifier, 'complete',
                         'Installed version confirmed; cancellation arrived after installation',
@@ -512,6 +521,8 @@ class FleetController:
                 progress.get('type') == update.get('release_type')
             ) else {}
             if not update:
+                if progress_only:
+                    continue
                 self.store.set_deployment_target(
                     deployment['id'], identifier, 'complete', 'Profile applied'
                 )
@@ -544,7 +555,7 @@ class FleetController:
                     deployment['id'], identifier, 'failed', detail, progress=progress
                 )
                 continue
-            if self._deployment_update_completed(deployment, identifier, record):
+            if not progress_only and self._deployment_update_completed(deployment, identifier, record):
                 self.store.set_deployment_target(
                     deployment['id'], identifier, 'complete',
                     (update.get('version') or 'Update') + ' installed',
@@ -615,7 +626,7 @@ class FleetController:
                 returned_at = int(record.get('last_seen', 0) or 0)
                 trial_active = any(progress.get(name) in ('trial', 'activating', 'committing')
                     for name in ('application_status', 'firmware_status', 'universal_status'))
-                if completed_at and returned_at > completed_at + 30 and not trial_active:
+                if not progress_only and completed_at and returned_at > completed_at + 30 and not trial_active:
                     self.store.set_deployment_target(
                         deployment['id'], identifier, 'failed',
                         'Device returned on its previous version'

@@ -11,7 +11,15 @@ function render(results,type='universal'){
   context.deployment={targets:Object.keys(results),results,update:{release_type:type}};
   return vm.runInContext('flowFor(deployment)',context);
 }
-function steps(html){return [...html.matchAll(/<div class="flow-step fleet-flow-step ([^"]*)" title="([^"]*)">.*?<strong>(.*?)<\/strong>/g)].map(([,tone,title,label])=>({tone,title,label}));}
+function steps(html){return [...html.matchAll(/<div class="flow-step fleet-flow-step ([^"]*)" title="([^"]*)" data-milestone-state="([^"]*)">.*?<strong>(.*?)<\/strong>/g)].map(([,tone,title,state,label])=>({tone,title,state,label}));}
+
+test('rings have explicit accessible states, with failure taking precedence over concurrent work',()=>{
+  const html=render({one:{status:'complete'},two:{status:'staging',update_phase:'core_write',update_milestones:['inspect']}});
+  assert.deepEqual(steps(html).map(step=>step.state),['Complete','Complete','Active',...Array(6).fill('Not running')]);
+  assert.match(html,/aria-label="Active: 1 of 2 devices completed/);
+  assert.doesNotMatch(html,/milestone-counts|milestone-running|milestone-errors/);
+  assert.equal(steps(render({one:{status:'checking'},two:{status:'failed'}}))[1].state,'Failed');
+});
 
 test('reported three-device case highlights only inspection, not every partial milestone',()=>{
   const flow=steps(render({one:{status:'checking'},two:{status:'failed'},three:{status:'complete'}}));

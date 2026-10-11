@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 3.2.4', addon)
+        self.assertIn('version: 3.2.5', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('slug: iot_md_management', addon)
         self.assertIn('8443/tcp: 8443', addon)
@@ -2242,6 +2242,120 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         store.complete_job(poll['id'])
         self.assertEqual(store.recover_poll_jobs(), 0)
         self.assertEqual(store.get_job(poll['id'])['status'], 'complete')
+
+    def test_device_progress_publishes_before_slow_configuration_health_and_event_reads(self):
+        from fleet_service import FleetController
+
+        store = self.module.FleetStore(Path(self.temp.name) / 'early-progress.db')
+        self.addCleanup(store.close)
+        store.register({'id': 'one', 'host': 'one.local'})
+        update = {'release_sequence': 2821, 'release_type': 'universal'}
+        deployment = store.create_deployment({'activation': 'now', 'update': update}, ['one'])
+        store.set_deployment_target(deployment['id'], 'one', 'checking')
+        command = {'id': 'download', 'action': 'download-update', **update}
+        inventory = {'device': {'release_sequence': 2820, 'firmware_release_sequence': 2820,
+            'update_progress': {**update, 'type': 'universal', 'phase': 'core_write',
+                'percent': 47, 'completed': ['queued', 'inspect']}},
+            'fleet': {'policy': {'commands': [command]}, 'pending_commands': [command]}}
+        controller = FleetController(store, mock.Mock())
+        def request(path):
+            if path == '/api/v3/device/inventory':
+                return inventory
+            result = store.get_deployment(deployment['id'])['results']['one']
+            self.assertEqual(result['update_phase'], 'core_write')
+            self.assertEqual(result['update_percent'], 47)
+            self.assertEqual(result['status'], 'staging')
+            self.assertEqual(store.get_device('one')['last_seen'], 0)
+            raise TimeoutError('Configuration read stalled')
+        controller._client = mock.Mock(return_value=mock.Mock(request=request))
+        controller.poll_device('one')
+        self.assertEqual(store.get_deployment(deployment['id'])['results']['one']['update_percent'], 47)
+        self.assertIn('stalled', store.get_device('one')['last_error'])
+
+    def test_partial_inventory_read_never_confirms_installation_or_profile_success(self):
+        from fleet_service import FleetController
+
+        store = self.module.FleetStore(Path(self.temp.name) / 'partial-confirmation.db')
+        self.addCleanup(store.close)
+        update = {'release_sequence': 2821, 'release_type': 'universal'}
+        deployment = store.create_deployment({'activation': 'now', 'update': update}, ['one'])
+        store.set_deployment_target(deployment['id'], 'one', 'installing')
+        profile = store.create_deployment({'profile_name': 'baseline'}, ['two'])
+        store.set_deployment_target(profile['id'], 'two', 'checking')
+        controller = FleetController(store, mock.Mock())
+        record = {'inventory': {'device': {'release_sequence': 2821, 'firmware_release_sequence': 2821}}}
+        controller._reconcile_deployments('one', record, progress_only=True)
+        controller._reconcile_deployments('two', record, progress_only=True)
+        self.assertEqual(store.get_deployment(deployment['id'])['results']['one']['status'], 'installing')
+        self.assertEqual(store.get_deployment(profile['id'])['results']['two']['status'], 'checking')
+        controller._reconcile_deployments('one', record)
+        self.assertEqual(store.get_deployment(deployment['id'])['results']['one']['status'], 'complete')
+
+    def test_poll_worker_startup_is_bounded_and_separate_from_mutations(self):
+        with mock.patch.object(self.module.threading, 'Thread') as thread, \
+                mock.patch.object(self.module, 'ThreadingHTTPServer'):
+            self.module.main()
+        workers = [call.kwargs for call in thread.call_args_list
+                   if call.kwargs.get('target') is self.module.job_loop]
+        self.assertEqual(len(workers), 5)
+        self.assertEqual(sum(worker['args'] == (True,) for worker in workers), 4)
+        self.assertEqual(sum(worker['args'] == (False,) for worker in workers), 1)
+
+    def test_parallel_polls_keep_another_device_live_while_one_configuration_read_stalls(self):
+        import threading
+        from fleet_service import FleetController
+
+        store = self.module.FleetStore(Path(self.temp.name) / 'parallel-progress.db')
+        self.addCleanup(store.close)
+        for identifier in ('one', 'two'):
+            store.register({'id': identifier, 'host': identifier + '.local'})
+        update = {'release_sequence': 2821, 'release_type': 'universal'}
+        deployment = store.create_deployment({'activation': 'now', 'update': update}, ['one', 'two'])
+        for identifier in deployment['targets']:
+            store.set_deployment_target(deployment['id'], identifier, 'checking')
+        command = {'id': 'download', 'action': 'download-update', **update}
+        controller = FleetController(store, mock.Mock())
+        stalled, release, completed = threading.Event(), threading.Event(), threading.Event()
+        errors = []
+        def client(record):
+            def request(path):
+                if path == '/api/v3/device/inventory':
+                    return {'device': {'update_progress': {**update, 'type': 'universal',
+                        'phase': 'core_write', 'percent': 47, 'completed': ['queued', 'inspect']}},
+                        'fleet': {'policy': {'commands': [command]}, 'pending_commands': [command]}}
+                if path == '/api/v3/configuration' and record['id'] == 'one':
+                    stalled.set()
+                    if not release.wait(5):
+                        raise TimeoutError('Test did not release stalled read')
+                return {}
+            return mock.Mock(request=request)
+        controller._client = client
+        def poll(identifier):
+            try:
+                controller.poll_device(identifier)
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                if identifier == 'two':
+                    completed.set()
+        slow = threading.Thread(target=poll, args=('one',))
+        fast = threading.Thread(target=poll, args=('two',))
+        slow.start()
+        try:
+            self.assertTrue(stalled.wait(3))
+            fast.start()
+            self.assertTrue(completed.wait(3), 'Second device was held behind the stalled first device')
+            self.assertTrue(slow.is_alive())
+            results = store.get_deployment(deployment['id'])['results']
+            self.assertTrue(all(result['update_percent'] == 47 for result in results.values()))
+            self.assertGreater(store.get_device('two')['last_seen'], 0)
+            self.assertEqual(store.get_device('one')['last_seen'], 0)
+        finally:
+            release.set()
+            slow.join(5)
+            if fast.ident is not None:
+                fast.join(5)
+        self.assertFalse(errors)
 
     def test_live_health_refresh_is_independent_and_resumes_when_tab_is_visible(self):
         html = self.module.HTML

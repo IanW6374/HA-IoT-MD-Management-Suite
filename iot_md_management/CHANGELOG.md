@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.2.5 - 2026-10-11
+
+- Simplify shared milestone rings across all action types: grey for not running,
+  amber for active, red for failed and green for complete. Keep completion counts
+  inside rings and richer state/count details in accessible hover text; remove
+  misaligned completion/running label rows and align two-line stage labels.
+- Separate action dispatch from four bounded, coalesced device polling workers
+  so a slow or rebooting device cannot serially hold up every other device.
+- Publish observed update progress as soon as inventory arrives, before slower
+  configuration, health and event reads. Keep final installation confirmation
+  on the full poll path; do not mark cached health fresh or confirm profile
+  success from partial inventory reads.
+- Add stalled-device concurrency, partial-confirmation and shared ring-style
+  regression coverage. Test real universal deployments with IoT-MD Alpha 116;
+  no device cleanup, reset or update is performed by publishing this release.
+
 ## 3.2.4 - 2026-10-11
 
 - Apply consistent action progress to universal/component/profile deployments,

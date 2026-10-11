@@ -775,10 +775,11 @@ def release_sync_loop():
 def main():
     STORE.recover_poll_jobs()
     threading.Thread(target=poll_loop, daemon=True).start()
-    threading.Thread(target=job_loop, daemon=True).start()
-    # Keep health collection independent of slow deployments and backups.
-    # Poll jobs are still coalesced and processed by one bounded worker.
-    threading.Thread(target=job_loop, args=(True,), daemon=True).start()
+    threading.Thread(target=job_loop, args=(False,), daemon=True).start()
+    # A rebooting/slow device must not hold up every other device's progress.
+    # Polls stay coalesced per device; mutations keep their separate worker.
+    for _ in range(4):
+        threading.Thread(target=job_loop, args=(True,), daemon=True).start()
     threading.Thread(target=backup_schedule_loop, daemon=True).start()
     if RELEASE_SYNC_STATE['enabled']:
         threading.Thread(target=release_sync_loop, daemon=True).start()
