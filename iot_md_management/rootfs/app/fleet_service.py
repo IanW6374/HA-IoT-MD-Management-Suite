@@ -12,6 +12,8 @@ import threading
 import urllib.error
 import urllib.request
 
+from progress_traces import clean_traces, copy_trace, failure_reason, retain_attempt
+
 
 BACKUP_KDF_ITERATIONS = 120000
 BACKUP_SALT_BYTES = 16
@@ -150,10 +152,15 @@ class DeviceClient:
         self._read_stage('reservation')
         self.read_path = path.split('?', 1)[0]
         error = ''
+        failure = ''
+        self.read_http_status = 0
+        budget_ms = 0
         try:
+            budget_ms = round(self._remaining() * 1000)
             return self._reserved_request(path, method, payload, content_type)
         except Exception as exc:
             error = device_connection_error(exc)
+            failure = failure_reason(exc)
             if method == 'GET':
                 self._observe_read(self.read_path, error)
             raise
@@ -162,6 +169,8 @@ class DeviceClient:
                 stage = self.read_stage
                 self._read_stage('finished')
                 self.read_metrics.append({'path': self.read_path, 'stage': self.read_stage,
+                    'start_offset_ms': round((started - getattr(self, 'metrics_started_at', started)) * 1000),
+                    'budget_ms': budget_ms, 'http_status': self.read_http_status, 'failure': failure,
                     'duration_ms': round((time.monotonic() - started) * 1000),
                     'response_bytes': self.read_bytes, 'error': bounded_text(error),
                     'stage_ms': dict(self.read_timings)})
@@ -271,8 +280,10 @@ class DeviceClient:
             with urllib.request.urlopen(
                 request, context=context, timeout=self._remaining()
             ) as response:
+                self.read_http_status = getattr(response, 'status', 0) or 0
                 return self._response_json(response)
         except urllib.error.HTTPError as exc:
+            self.read_http_status = exc.code
             try:
                 value = self._response_json(exc.fp)
                 detail = value.get('error') if isinstance(value, dict) else value
@@ -335,6 +346,7 @@ class FleetController:
         self._progress_reads = {}
         self._progress_clients = {}
         self._api_reads = {}
+        self._progress_traces = {}
 
     def _action_lock(self, identifier):
         with self._action_locks_guard:
@@ -592,11 +604,41 @@ class FleetController:
 
     def progress_diagnostics(self):
         enabled = set(self.store.device_ids(enabled_only=True))
+        registered = set(self.store.device_ids())
         with self._progress_lock:
             self._progress_reads = {key: value for key, value in self._progress_reads.items() if key in enabled}
             self._progress_clients = {key: value for key, value in self._progress_clients.items() if key in enabled}
             self._api_reads = {key: value for key, value in self._api_reads.items() if key in enabled}
-            return {key: dict(value) for key, value in self._progress_reads.items()}
+            self._progress_traces = {key: value for key, value in self._progress_traces.items() if key in registered}
+            return copy_trace(self._progress_reads)
+
+    def progress_trace_export(self, deployment_id='', device_id=''):
+        """Read retained local evidence only; never contact a device."""
+        deployment = self.store.get_deployment(deployment_id) if deployment_id else None
+        if deployment_id and not deployment:
+            raise ValueError('deployment is not registered')
+        identifiers = [device_id] if device_id else (
+            deployment['targets'] if deployment else self.store.device_ids())
+        devices = []
+        for identifier in identifiers:
+            if deployment and identifier not in deployment['targets']:
+                continue
+            record = self.store.get_device(identifier, public=False)
+            if not record:
+                continue
+            with self._progress_lock:
+                cached = self._progress_traces.get(identifier)
+                traces = clean_traces(cached) if cached is not None else None
+            if traces is None:
+                traces = clean_traces(self.store.get_progress_traces(identifier))
+            if deployment_id:
+                traces['deployments'] = {key: value for key, value in traces['deployments'].items()
+                                          if key == deployment_id}
+            devices.append({'id': identifier, 'host': record['host'], 'port': record['port'],
+                            'traces': traces})
+        return {'format_version': 1, 'exported_at': self.now(),
+                'request_timeout_s': self.timeout, 'progress_timeout_s': self.progress_timeout,
+                'devices': devices}
 
     def _progress_client(self, record):
         # Only the scheduler's serialized, read-only live lane reuses clients.
@@ -637,7 +679,18 @@ class FleetController:
         record = self.store.get_device(identifier, public=False)
         if not record or not record.get('enabled'):
             return
+        started_at = self.now()
+        deployments = [item for item in self.store.active_deployments()
+                       if identifier in item['targets']]
+        with self._progress_lock:
+            self._api_reads.setdefault(identifier, copy_trace(record.get('poll_state') or {}))
+            loaded = identifier in self._progress_traces
+        if not loaded:
+            saved = clean_traces(self.store.get_progress_traces(identifier))
+            with self._progress_lock:
+                self._progress_traces.setdefault(identifier, saved)
         received = False
+        failure = ''
         client = None
         workflow_stage = 'discovery'
         boot_id = ''
@@ -645,6 +698,7 @@ class FleetController:
             client = self._progress_client(record)
             if isinstance(client, DeviceClient):
                 client.read_metrics = []
+                client.metrics_started_at = started
                 # Discovery is bootstrap, not part of the status-read deadline.
                 client.timeout = self.timeout
                 if (client.api_metadata is not None and
@@ -722,6 +776,7 @@ class FleetController:
                             'cancelled', 'Update cancelled; staged data discarded')
             self._progress_observed(identifier, started, received=True)
         except Exception as exc:
+            failure = failure_reason(exc)
             # A slow status/health response doesn't invalidate successful API
             # discovery. Identity/certificate changes are handled by the cache
             # fingerprint; protocol/auth rejection explicitly invalidates it.
@@ -744,8 +799,14 @@ class FleetController:
                     if previous_boot and previous_boot != boot_id and isinstance(client, DeviceClient):
                         client.api_metadata = None
                 self._progress_reads[identifier] = diagnostic
+                traces = retain_attempt(self._progress_traces.get(identifier), deployments, {
+                    'started_at': started_at, 'finished_at': self.now(),
+                    'duration_ms': round((time.monotonic() - started) * 1000),
+                    'workflow_stage': workflow_stage, 'received': received,
+                    'failure': failure, 'reads': diagnostic['reads']})
+                self._progress_traces[identifier] = traces
             # One durable diagnostic write per live workflow, not per HTTP read.
-            self.store.record_poll_state(identifier, self._poll_state(identifier))
+            self.store.record_progress_poll(identifier, self._poll_state(identifier), traces)
 
     @staticmethod
     def _update_installed(record, update):

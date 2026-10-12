@@ -35,6 +35,45 @@ the failed workflow stage and next retry. Browser periodic reads are scoped to
 the visible page and single-flight; deployment/device status retain independent
 refresh paths and revision guards.
 
+### Retained tracing for a controlled physical-device test
+
+Actions and Logs / Activity offer **Download diagnostics** for a deployment,
+including after it completes. `GET /api/progress-traces?deployment=ID` downloads
+the same cached JSON; optional `device=ID` restricts it to one enrolled target.
+Without a deployment filter, all enrolled devices' retained groups are exported.
+The endpoint does not poll devices, dispatch commands, cancel or restart them.
+
+Traces are retained in a separate, additive Management SQLite table, committed
+alongside poll state in one durable transaction per live workflow. Unchanged
+older groups are not rewritten. Full inventory polls cannot overwrite traces,
+and routine device-list reads do not select/decode trace history. Each device
+retains four most-recently observed
+deployments, each with 32 recent attempts and eight separately retained failed
+attempts. Cumulative attempt/failure/read counts show truncation. Successful
+reads cannot evict the separate failure history. Completion and an add-on
+restart do not erase traces. Older groups eventually age out; export promptly.
+Trace arrays are omitted from normal device/deployment responses, so repeated
+browser refreshes do not download this history.
+The schema-5 to schema-6 add-on upgrade is additive and retains device records,
+credentials, queued jobs and existing action history; no clean seed is needed.
+
+Every attempt records UTC epoch start/end, monotonic duration, workflow phase,
+response receipt and categorized failure. Read evidence includes endpoint,
+start offset, available budget, HTTP status (zero if unavailable), duration,
+bytes and reservation/TLS-context/connect-and-headers/body/decode timings.
+Exports whitelist fields and failure categories: they do not include response
+bodies, request payloads, headers, idempotency keys or credential file paths.
+Scheduler data in an export is the current snapshot, not historical admission
+timing. Only live reconciliation reads are traced; mutation submissions and
+full inventory workflows are not included. This is deliberately not a change
+to retry, timeout, authorization or operation replay behaviour.
+
+Before testing a genuine newer universal release, obtain separate approval for
+receive-only USB capture and start it before dispatch. Export diagnostics after
+any stall and after completion, and correlate timestamps with UART evidence.
+Offline tests verify retention and boundedness, not real-device flash/TLS
+performance; tracing is evidence collection, not a proven freeze correction.
+
 The Actions page requests only active deployments plus up to 64 previously
 active identifiers to observe terminal transitions. It does not transfer the
 200-batch history on every live refresh; a bounded recent terminal cache keeps

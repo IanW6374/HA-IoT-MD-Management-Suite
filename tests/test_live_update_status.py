@@ -73,6 +73,66 @@ class LiveStatusTests(unittest.TestCase):
         self.assertEqual(self.paths.count('/api/v3'), 1)
         self.assertEqual(self.result()['status'], 'complete')
 
+    def test_retained_failure_survives_recovery_completion_and_controller_restart(self):
+        self.delay = lambda path: 6 if path.endswith('/update-status') else 3
+        with self.assertRaises(TimeoutError):
+            self.controller.poll_progress(self.identifier)
+        self.delay = lambda path: 3
+        self.controller.poll_progress(self.identifier)
+        self.assertEqual(self.result()['status'], 'complete')
+        self.assertEqual(self.controller.progress_diagnostics()[self.identifier]['error'], '')
+        restarted = FleetController(self.store, None, timeout=10, now=lambda: int(self.clock))
+        with mock.patch.object(restarted, '_client', side_effect=AssertionError('Device I/O')):
+            exported = restarted.progress_trace_export(self.deployment['id'])
+        group = exported['devices'][0]['traces']['deployments'][self.deployment['id']]
+        self.assertEqual(group['attempts_total'], 2)
+        self.assertEqual(group['failures_total'], 1)
+        failure = group['failures'][0]
+        self.assertEqual(failure['workflow_stage'], 'status')
+        self.assertEqual(failure['reads'][-1]['failure'], 'socket_timeout')
+        self.assertEqual(failure['reads'][-1]['path'], '/api/v3/fleet/update-status')
+        self.assertEqual(failure['reads'][-1]['start_offset_ms'], 3000)
+        self.assertEqual(failure['reads'][-1]['budget_ms'], 5000)
+        self.assertEqual(failure['duration_ms'], 8000)
+        self.assertEqual(group['attempts'][-1]['failure'], '')
+        self.assertEqual(group['attempts'][-1]['workflow_stage'], 'confirmation')
+        self.assertNotIn('progress_traces', self.store.get_device(self.identifier)['poll_state'])
+        self.assertNotIn('progress_traces', self.store.get_device(self.identifier, public=False)['poll_state'])
+        self.assertIn(self.deployment['id'], self.store.get_progress_traces(self.identifier)['deployments'])
+        self.store.record_poll_state(self.identifier, {'api': {'last_success': 9999}})
+        self.assertIn(self.deployment['id'], self.store.get_progress_traces(self.identifier)['deployments'])
+
+    def test_later_deployment_export_cannot_inherit_an_earlier_failure(self):
+        self.delay = lambda path: 6
+        with self.assertRaises(TimeoutError): self.controller.poll_progress(self.identifier)
+        self.delay = lambda path: 0
+        self.controller.poll_progress(self.identifier)
+        later = self.store.create_deployment({'update': {**self.update, 'release_sequence': 2823}}, [self.identifier])
+        self.store.set_deployment_target(later['id'], self.identifier, 'checking')
+        self.controller.poll_progress(self.identifier)
+        data = self.controller.progress_trace_export(later['id'])['devices'][0]['traces']['deployments']
+        self.assertEqual(list(data), [later['id']])
+        self.assertEqual(data[later['id']]['failures_total'], 0)
+        self.assertEqual(len(self.controller.progress_trace_export()['devices'][0]['traces']['deployments']), 2)
+
+    def test_trace_failure_contains_no_exception_payload_or_credential_path(self):
+        def unavailable(*args, **kwargs):
+            raise TimeoutError('password=secret /private/client.key?token=secret')
+        with mock.patch.object(fleet_service.urllib.request, 'urlopen', side_effect=unavailable):
+            with self.assertRaises(TimeoutError): self.controller.poll_progress(self.identifier)
+        text = json.dumps(self.controller.progress_trace_export())
+        self.assertNotIn('secret', text)
+        self.assertNotIn('client.key', text)
+        self.assertIn('socket_timeout', text)
+
+    def test_expired_budget_is_also_measured_without_replaying_a_request(self):
+        client = self.controller._progress_client(self.store.get_device(self.identifier, public=False))
+        client.deadline = self.clock - 1
+        with self.assertRaises(TimeoutError): client.request('/api/v3')
+        self.assertEqual(self.paths, [])
+        self.assertEqual(client.read_metrics[-1]['failure'], 'read_deadline_exceeded')
+        self.assertEqual(client.read_metrics[-1]['stage'], 'reservation')
+
     def test_health_timeout_never_confirms_cached_health_or_evicts_discovery(self):
         self.delay = lambda path: 11 if path.endswith('/health') else 3
         with self.assertRaises(TimeoutError): self.controller.poll_progress(self.identifier)

@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SOURCE = Path(__file__).resolve().parents[1] / 'iot_md_management/rootfs/app/fleet_service.py'
+sys.path.insert(0, str(SOURCE.parent))
 SPEC = importlib.util.spec_from_file_location('v3_fleet_service', SOURCE)
 SERVICE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SERVICE)

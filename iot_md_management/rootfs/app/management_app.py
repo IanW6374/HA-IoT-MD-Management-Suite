@@ -321,12 +321,14 @@ def render_portal(page):
 class Handler(BaseHTTPRequestHandler):
     server_version = 'IoT-MD-Fleet/2'
 
-    def _json(self, status, value):
+    def _json(self, status, value, download=False):
         body = json.dumps(value).encode()
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
+        if download:
+            self.send_header('Content-Disposition', 'attachment; filename="iot-md-progress-traces.json"')
         self.end_headers()
         self.wfile.write(body)
 
@@ -407,6 +409,17 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/scheduler':
                 self._json(200, {'scheduler': SCHEDULER.snapshot() if SCHEDULER else {},
                     'progress_reads': CONTROLLER.progress_diagnostics()})
+            elif path == '/api/progress-traces':
+                query = parse_qs(urlparse(self.path).query)
+                data = CONTROLLER.progress_trace_export(
+                    query.get('deployment', [''])[0][:256], query.get('device', [''])[0][:64])
+                data['trace_implementation'] = 'retained-live-reads-v1'
+                data['scheduler'] = SCHEDULER.snapshot() if SCHEDULER else {}
+                for observation in data['scheduler'].get('devices', {}).values():
+                    # The existing debug endpoint keeps raw last-error text;
+                    # this payload-free export contains only a failure flag.
+                    observation['last_read_failed'] = bool(observation.pop('error', ''))
+                self._json(200, data, download=True)
             elif path == '/api/rollouts':
                 self._json(200, {'rollouts': STORE.list_rollouts()})
             elif path == '/api/profiles':

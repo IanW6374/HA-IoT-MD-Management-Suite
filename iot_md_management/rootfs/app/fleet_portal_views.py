@@ -42,6 +42,10 @@ def compose(html):
     html = html.replace("await Promise.all(identifiers.map(identifier=>api('api/jobs/'+identifier).then(data=>data.job)))",
                         'await readBackupJobs(identifiers)')
     html = html.replace('const activePage=', (assets / 'action_progress.js').read_text() + '\nconst activePage=', 1)
+    html = html.replace('${updateCancelAllBadge(deployment)}${statusBadge(deployment.status)}',
+                        '${progressTraceLink(deployment)}${updateCancelAllBadge(deployment)}${statusBadge(deployment.status)}')
+    html = html.replace('<div class="deployment-targets">${targetRows}</div></details>',
+                        '<div class="deployment-targets">${targetRows}</div>${progressTraceLink(deployment)}</details>')
     html = html.replace('</style>', (assets / 'action_progress.css').read_text() + '</style>', 1)
     # Groups and select-all are inside the device picker, not separate modes.
     html = re.sub(

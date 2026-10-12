@@ -10,7 +10,7 @@ from pathlib import Path
 from fleet_identity import hostname_identity, migrate_hostname_identities
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def _json(value):
@@ -153,6 +153,13 @@ class FleetRepository:
                 );
                 CREATE INDEX IF NOT EXISTS audit_events_created
                     ON audit_events(created_at DESC,id DESC);
+                CREATE TABLE IF NOT EXISTS progress_traces (
+                    device_id TEXT NOT NULL,
+                    deployment_id TEXT NOT NULL,
+                    traces TEXT NOT NULL,
+                    observed_at INTEGER NOT NULL,
+                    PRIMARY KEY(device_id,deployment_id)
+                );
                 CREATE TABLE IF NOT EXISTS backups (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     device_id TEXT NOT NULL,
@@ -214,7 +221,7 @@ class FleetRepository:
             stored_version = int(self.connection.execute(
                 'SELECT value FROM metadata WHERE key=?', ('schema_version',)
             ).fetchone()['value'])
-            if stored_version in (1, 2, 3, 4):
+            if stored_version in (1, 2, 3, 4, 5):
                 self.connection.execute(
                     'UPDATE metadata SET value=? WHERE key=?',
                     (str(SCHEMA_VERSION), 'schema_version')
@@ -526,6 +533,7 @@ class FleetRepository:
             cursor = self.connection.execute(
                 'DELETE FROM devices WHERE id=?', (identifier,)
             )
+            self.connection.execute('DELETE FROM progress_traces WHERE device_id=?', (identifier,))
         if cursor.rowcount != 1:
             raise ValueError('device is not registered')
         return {'deleted': True, 'id': identifier}
@@ -534,6 +542,39 @@ class FleetRepository:
         with self.lock, self.connection:
             self.connection.execute('UPDATE devices SET poll_state=? WHERE id=?',
                                     (_json(state), str(identifier)))
+
+    def get_progress_traces(self, identifier):
+        # Frequent device/deployment list reads never select/decode trace JSON.
+        with self.lock:
+            rows = self.connection.execute(
+                'SELECT deployment_id,traces FROM progress_traces WHERE device_id=? ORDER BY observed_at,rowid',
+                (str(identifier),)).fetchall()
+        return {'format_version': 1, 'deployments': {
+            row['deployment_id']: _object(row['traces'], {}) for row in rows}}
+
+    def record_progress_poll(self, identifier, state, traces):
+        """Persist diagnostics and bounded trace groups in one durable commit."""
+        groups = traces['deployments']
+        with self.lock, self.connection:
+            if not self.connection.execute('SELECT 1 FROM devices WHERE id=?', (str(identifier),)).fetchone():
+                return
+            self.connection.execute('UPDATE devices SET poll_state=? WHERE id=?',
+                                    (_json(state), str(identifier)))
+            previous = self.connection.execute(
+                'SELECT deployment_id FROM progress_traces WHERE device_id=?', (str(identifier),)).fetchall()
+            for row in previous:
+                if row['deployment_id'] not in groups:
+                    self.connection.execute('DELETE FROM progress_traces WHERE device_id=? AND deployment_id=?',
+                                            (str(identifier), row['deployment_id']))
+            for deployment_id, group in groups.items():
+                # Unchanged older groups cause no SQLite page writes. A full
+                # inventory poll cannot overwrite these separate trace rows.
+                observed_at = (group.get('attempts') or [{}])[-1].get('finished_at', 0)
+                self.connection.execute('''INSERT INTO progress_traces(device_id,deployment_id,traces,observed_at)
+                    VALUES(?,?,?,?) ON CONFLICT(device_id,deployment_id) DO UPDATE SET
+                    traces=excluded.traces,observed_at=excluded.observed_at
+                    WHERE progress_traces.traces != excluded.traces''',
+                    (str(identifier), deployment_id, _json(group), observed_at))
 
     def set_device_error(self, identifier, detail, poll_state=None):
         with self.lock, self.connection:

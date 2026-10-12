@@ -26,6 +26,7 @@ function profileFlow(deployment){
  const rows=deploymentRows(deployment),done=rows.filter(row=>row.status==='complete').length,running=rows.filter(row=>operationOutcome(row.status)==='running').length,failed=rows.filter(row=>row.status==='failed').length;
  return milestoneFlow(['Queued','Apply configuration','Confirm applied'],[rows.length,done,done],rows.length,failed>0,[0,running,0],[0,failed,0],{id:deployment.id,names:['queued','stage','complete']},[],[0,0,failed]);
 }
+function progressTraceLink(deployment){return `<a class="button secondary compact" href="api/progress-traces?deployment=${esc(encodeURIComponent(deployment.id))}" download="iot-md-progress-traces.json" title="Download retained read timing and failures; no device requests">Download diagnostics</a>`;}
 function progressReadPresentation(poll,status,now=Date.now()/1000){
  if(!poll||['complete','failed','cancelled'].includes(status))return null;
  const received=Number(poll.last_received)||0,age=Math.max(0,Math.floor(now-received)),stale=received&&age>Number(poll.stale_after_s||15);

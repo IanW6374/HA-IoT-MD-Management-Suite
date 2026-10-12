@@ -103,7 +103,7 @@ class PollHealthTests(unittest.TestCase):
         self.assertEqual(record['inventory']['device']['marker'], 'retained')
         self.assertEqual(record['last_seen'], 2000)
         self.assertEqual(record['poll_state'], {})
-        self.assertEqual(upgraded.metadata('schema_version'), '5')
+        self.assertEqual(upgraded.metadata('schema_version'), '6')
         self.assertEqual(upgraded.get_deployment(deployment['id'])['status'], 'queued')
         self.assertEqual(upgraded.get_job(job['id'])['status'], 'queued')
         self.assertEqual(upgraded.metadata('next_policy_sequence'), '199')

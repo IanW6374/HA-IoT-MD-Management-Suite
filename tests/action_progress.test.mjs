@@ -19,6 +19,17 @@ function fixture(count=100,type='universal'){
  w.backupState={pending:null};w.renderDeployments=()=>{w.document.getElementById('deployments').innerHTML=w.activeDeploymentCard(w.deployment)};
  w.eval(flows+'\n'+actions);w.renderDeployments();return {dom,w,doc:w.document};
 }
+test('diagnostic download remains available for completed deployment and URL-encodes its identity',()=>{
+ const {dom,w}=fixture(3);try{
+  const link=new JSDOM(w.progressTraceLink({id:'batch?<script>&',status:'complete'}));
+  const anchor=link.window.document.querySelector('a');
+  assert.equal(anchor.textContent,'Download diagnostics');
+  assert.equal(anchor.getAttribute('download'),'iot-md-progress-traces.json');
+  assert.equal(anchor.getAttribute('href'),'api/progress-traces?deployment=batch%3F%3Cscript%3E%26');
+  assert.equal(link.window.document.querySelector('script'),null);
+  link.window.close();
+ }finally{dom.window.close();}
+});
 test('100-target batch has bounded rows and separate outcomes, not a made-up overall percentage',()=>{
  const {dom,doc}=fixture();try{
   assert.equal(doc.querySelectorAll('.operation-device-row').length,25);

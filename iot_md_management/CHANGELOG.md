@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.2.10 - 2026-10-12
+
+- Retain bounded, per-deployment live-read traces in Management SQLite. Keep
+  failed attempts separately so recovery and completion do not erase evidence;
+  preserve it through add-on restart, with cumulative counts for truncation.
+- Download cached diagnostics from In-Flight actions or activity history.
+  Record UTC timestamps, monotonic timing, budgets, HTTP status, bytes and
+  categorized reservation/TLS/connect/body/decode failures without payloads,
+  headers, idempotency keys or credential paths. Normal fleet refreshes omit
+  trace arrays; exports never contact devices.
+- No retry, timeout, mutation replay or update-completion policy changes.
+  This supports a controlled physical test; the real-device telemetry freeze
+  cause remains unproven and is not claimed fixed by offline verification.
+
 ## 3.2.9 - 2026-10-12
 
 - Use the authenticated small live update-status capability when available;

@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 3.2.9', addon)
+        self.assertIn('version: 3.2.10', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('device_worker_limit: 8', addon)
         self.assertIn('device_worker_limit: int(2,32)', addon)
@@ -90,6 +90,41 @@ class FleetAddonTests(unittest.TestCase):
             data = handler._json.call_args.args[1]['deployments']
             self.assertEqual([item['id'] for item in data], [live['id']])
             self.assertEqual(data[0]['status'], 'cancelled')
+
+    def test_retained_trace_download_is_cached_and_available_in_activity_history(self):
+        store = self.module.STORE
+        store.register({'id': 'trace-device', 'host': 'trace-device.local'})
+        deployment = store.create_deployment({'update': {'release_sequence': 2825,
+            'release_type': 'universal'}}, ['trace-device'])
+        store.set_deployment_target(deployment['id'], 'trace-device', 'complete')
+        store.record_progress_poll('trace-device', {}, {'deployments': {
+            deployment['id']: {'failures_total': 1, 'failures': [
+                {'workflow_stage': 'status', 'failure': 'socket_timeout'}]}}})
+        handler = object.__new__(self.module.Handler)
+        handler._json = mock.Mock()
+        handler.path = '/api/progress-traces?deployment=' + deployment['id']
+        with mock.patch.object(self.module.CONTROLLER, '_client', side_effect=AssertionError('Device I/O')):
+            with mock.patch.object(self.module, 'SCHEDULER', mock.Mock(snapshot=lambda: {
+                    'devices': {'trace-device': {'error': 'password=secret /private/client.key', 'duration_ms': 5000}}})):
+                handler.do_GET()
+        status, data = handler._json.call_args.args
+        self.assertEqual(status, 200)
+        self.assertEqual(handler._json.call_args.kwargs, {'download': True})
+        self.assertEqual(data['devices'][0]['traces']['deployments'][deployment['id']]['failures_total'], 1)
+        self.assertNotIn('secret', json.dumps(data))
+        self.assertTrue(data['scheduler']['devices']['trace-device']['last_read_failed'])
+        self.assertIn('${progressTraceLink(deployment)}</details>', self.module.HTML)
+        self.assertIn('${progressTraceLink(deployment)}${updateCancelAllBadge(deployment)}', self.module.HTML)
+
+    def test_trace_download_sets_attachment_and_no_cache_headers(self):
+        handler = object.__new__(self.module.Handler)
+        handler.send_response = mock.Mock()
+        handler.send_header = mock.Mock()
+        handler.end_headers = mock.Mock()
+        handler.wfile = io.BytesIO()
+        handler._json(200, {'devices': []}, download=True)
+        handler.send_header.assert_any_call('Content-Disposition', 'attachment; filename="iot-md-progress-traces.json"')
+        handler.send_header.assert_any_call('Cache-Control', 'no-store')
 
     def test_ingress_uses_shared_iot_brand_shell(self):
         self.assertIn('<header class="topbar">', self.module.HTML)
@@ -1464,7 +1499,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
             ).fetchall()
         }
         self.assertIn('profile_type', columns)
-        self.assertEqual(upgraded.metadata('schema_version'), '5')
+        self.assertEqual(upgraded.metadata('schema_version'), '6')
 
     def test_device_cohort_edit_and_configuration_profiles_persist(self):
         path = Path(self.temp.name) / 'editable.db'
