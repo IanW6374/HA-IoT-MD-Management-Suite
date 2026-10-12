@@ -1,5 +1,33 @@
 # Changelog
 
+## 3.2.12 - 2026-10-12
+
+- Track new update actions by their exact device-owned operation ID and signed
+  release identity. Persist dispatch identity before the write; reduce ordered
+  device snapshots into progress/history without installed-version inference.
+  Require IoT-MD Alpha 123 or newer; bootstrap devices before upgrading Management.
+- Retain interrupted operations as unresolved history. Connectivity timeouts are
+  not installation evidence, and cancellation targets the exact operation ID.
+- Queue cohort rollouts through the same bounded per-device scheduler and operation
+  lifecycle as ordinary update actions. Gate cohorts on authoritative outcomes.
+- This release uses authenticated Device API snapshots. Optional MQTT reporting
+  is not enabled; broker destination and reporting authorization remain pending.
+
+- Add confirmed, Management-only Stop tracking for stuck deployments. Preserve
+  completed/failed/cancelled results, retire unfinished results and local queue
+  records as unresolved, and retain history, audit and diagnostic evidence.
+  Send no device commands; refuse while a local device mutation is in progress.
+  Guard against late responses or workers reopening retired tracking.
+- Refresh installed component versions independently of job/health outcomes.
+  Persist validated version evidence even if later full-poll reads fail; clear
+  mismatched cached labels when live release numbers change. Read missing labels
+  with an occasional bounded API v3 device read, retaining retry diagnostics
+  without replaying mutations or marking an older job complete/cancelled.
+- Present unconfirmed cancellation/URL timeout feedback as a short inline amber
+  status message, not a boxed red upgrade error. Retain the escaped technical
+  reason in its tooltip and keep reconciliation, disabled cancellation controls
+  and no-replay safeguards unchanged.
+
 ## 3.2.11 - 2026-10-12
 
 - Recognize authenticated API v3 storage failures as rejected only with complete

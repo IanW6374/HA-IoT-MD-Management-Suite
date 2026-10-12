@@ -10,7 +10,7 @@ const source=fs.readFileSync(new URL('../iot_md_management/rootfs/app/assets/upd
 const progressSource=fs.readFileSync(new URL('../iot_md_management/rootfs/app/assets/deployment_status.js',import.meta.url),'utf8');
 function fixture(status='staging'){
   const deployment={id:'deploy',update:{release_sequence:123},targets:['one'],results:{one:{status}}};
-  const context=vm.createContext({state:{deployments:[deployment],devices:[{id:'one',host:'one.local'}]},esc:value=>String(value).replaceAll('<','&lt;'),confirm:()=>true,renderDeployments(){},renderMetrics(){},renderActionHistory(){},showWorkspaceError(){},clearWorkspaceError(){},setTimeout,clearTimeout,document:{hidden:false,getElementById:()=>null,addEventListener(){}},window:{addEventListener(){}}});
+  const context=vm.createContext({state:{deployments:[deployment],devices:[{id:'one',host:'one.local'}]},esc:value=>String(value??'').replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character])),confirm:()=>true,renderDeployments(){},renderMetrics(){},renderActionHistory(){},showWorkspaceError(){},clearWorkspaceError(){},setTimeout,clearTimeout,document:{hidden:false,getElementById:()=>null,addEventListener(){}},window:{addEventListener(){}}});
   vm.runInContext(progressSource+'\n'+source,context);
   context.refreshDeploymentProgress=async()=>{};return context;
 }
@@ -30,7 +30,7 @@ test('confirmation is required and a failed cancellation remains visible without
   await vm.runInContext('cancelDeploymentUpdate(button)',context);assert.equal(calls,0);
   context.confirm=()=>true;
   await vm.runInContext('cancelDeploymentUpdate(button)',context);assert.equal(calls,1);
-  assert.match(vm.runInContext("updateCancelError(state.deployments[0],'one')",context),/role="alert">Cancellation not confirmed/);
+  assert.match(vm.runInContext("updateCancelError(state.deployments[0],'one')",context),/role="status" title="Cancellation not confirmed">Cancellation not confirmed; checking status/);
   assert.equal(context.state.deployments[0].results.one.status,'staging');
 });
 test('accepted cancellation reflects acknowledgement, not an invented successful completion',async()=>{
@@ -39,6 +39,42 @@ test('accepted cancellation reflects acknowledgement, not an invented successful
   await vm.runInContext('cancelDeploymentUpdate(button)',context);
   assert.equal(context.state.deployments[0].results.one.status,'cancelling');
   assert.match(vm.runInContext("updateCancelDeviceBadge(state.deployments[0],'one')",context),/Cancelling…/);
+});
+test('URL timeout stays an inline warning with technical tooltip, never a boxed upgrade failure or replay',async()=>{
+  const context=fixture();let calls=0;
+  context.button={dataset:{deployment:'deploy',device:'one'}};
+  context.api=async()=>{calls++;throw Error('<urlopen error timed out>');};
+  await vm.runInContext('cancelDeploymentUpdate(button)',context);
+  const css=fs.readFileSync(new URL('../iot_md_management/rootfs/app/assets/action_progress.css',import.meta.url),'utf8');
+  const dom=new JSDOM(`<style>:root{--warn:#aa6600;--muted:#556677}${css}</style><article class="deployment"><table class="operation-table"><tr><td>${vm.runInContext("updateCancelError(state.deployments[0],'one')",context)}</td></tr></table></article>`);
+  try{
+    const notice=dom.window.document.querySelector('.update-cancel-feedback');
+    assert.equal(notice.tagName,'SMALL');assert.equal(notice.getAttribute('role'),'status');
+    assert.equal(notice.textContent,'Cancellation not confirmed; checking status.');
+    assert.equal(notice.title,'<urlopen error timed out>');
+    assert.equal(dom.window.document.querySelector('.status.error,[role="alert"],urlopen'),null);
+    const style=dom.window.getComputedStyle(notice);
+    assert.equal(style.color,'var(--warn)');
+    assert.equal(parseFloat(style.borderTopWidth||'0'),0);assert.equal(parseFloat(style.paddingTop||'0'),0);
+    assert.match(vm.runInContext("updateCancelDeviceBadge(state.deployments[0],'one')",context),/disabled.*Checking…/);
+    assert.equal(context.state.deployments[0].results.one.status,'staging');
+    await vm.runInContext('cancelDeploymentUpdate(button)',context);assert.equal(calls,1);
+    context.state.deployments[0].results.one.status='cancelled';
+    vm.runInContext('reconcileUpdateCancellations()',context);
+    assert.equal(vm.runInContext("updateCancelError(state.deployments[0],'one')",context),'');
+  }finally{dom.window.close();}
+});
+test('technical cancellation reason is safely escaped inside its tooltip',()=>{
+  const context=fixture(),reason='<img src=x onerror=alert(1)> " onmouseover="alert(2) & timeout';
+  context.reason=reason;
+  vm.runInContext("updateCancelErrors.set('deploy:one',reason)",context);
+  const dom=new JSDOM(vm.runInContext("updateCancelError(state.deployments[0],'one')",context));
+  try{
+    const notice=dom.window.document.querySelector('.update-cancel-feedback');
+    assert.equal(notice.title,reason);
+    assert.equal(notice.hasAttribute('onmouseover'),false);
+    assert.equal(dom.window.document.querySelector('img,script'),null);
+  }finally{dom.window.close();}
 });
 
 function batchFixture(){
@@ -78,7 +114,7 @@ test('Cancel all continues after an unconfirmed device; no POST is replayed on r
   context.showWorkspaceError=(...args)=>errors.push(args);
   await vm.runInContext('cancelAllDeploymentUpdates(button)',context);
   assert.deepEqual(calls,['one','two']);assert.ok(errors.length>=1);
-  assert.match(vm.runInContext("updateCancelError(state.deployments[0],'one')",context),/&lt;Unconfirmed>/);
+  assert.match(vm.runInContext("updateCancelError(state.deployments[0],'one')",context),/&lt;Unconfirmed&gt;/);
   assert.equal(context.state.deployments[0].results.one.status,'queued');
 });
 test('each acknowledgement renders before the next cancellation finishes',async()=>{
@@ -198,4 +234,39 @@ test('composed live cards place cancellation badges immediately before statuses,
   }
   const history=html.split('\n').find(line=>line.startsWith('function deploymentHistoryEntry('));
   if(history)assert.doesNotMatch(history,/updateCancelDeviceBadge|updateCancelAllBadge/);
+});
+test('Stop tracking confirms the device may continue and sends only a Management retirement request',async()=>{
+  const context=fixture();context.state.deployments[0].status='active';context.button={dataset:{deployment:'deploy'}};
+  let calls=0,message='';context.confirm=text=>{message=text;return false;};
+  context.api=async(path,options)=>{
+    calls++;assert.equal(path,'api/deployments/stop-tracking');
+    assert.deepEqual(JSON.parse(options.body),{deployment_id:'deploy',confirmation:'stop tracking deploy'});
+    return {...context.state.deployments[0],revision:2,status:'unresolved',results:{one:{status:'unresolved',detail:'Device outcome unconfirmed'}}};
+  };
+  await vm.runInContext('stopTrackingDeployment(button)',context);assert.equal(calls,0);
+  assert.match(message,/No device commands are sent; the device may continue/);
+  context.confirm=()=>true;
+  await vm.runInContext('stopTrackingDeployment(button)',context);
+  assert.equal(calls,1);assert.equal(context.state.deployments[0].status,'unresolved');
+  assert.equal(vm.runInContext('stopTrackingBadge(state.deployments[0])',context),'');
+  assert.equal(vm.runInContext("updateCancelDeviceBadge(state.deployments[0],'one')",context),'');
+  await vm.runInContext('stopTrackingDeployment(button)',context);assert.equal(calls,1);
+});
+test('Stop tracking is single-flight and rejected acknowledgement never invents unresolved status',async()=>{
+  const context=fixture();context.state.deployments[0].status='active';context.button={dataset:{deployment:'deploy'}};
+  let calls=0,reject;
+  context.api=()=>{calls++;return new Promise((_,fail)=>reject=fail);};
+  const work=vm.runInContext('stopTrackingDeployment(button)',context);
+  assert.match(vm.runInContext('stopTrackingBadge(state.deployments[0])',context),/disabled.*Stopping tracking…/);
+  await vm.runInContext('stopTrackingDeployment(button)',context);assert.equal(calls,1);
+  reject(Error('Management request still running'));await work;
+  assert.equal(context.state.deployments[0].status,'active');
+  assert.match(vm.runInContext('stopTrackingBadge(state.deployments[0])',context),/role="status".*Management request still running/);
+});
+test('composed live card offers Stop tracking without moving Cancel all away from overall status',()=>{
+  const html=execFileSync(process.env.PYTHON||'python3',['-c',"import sys;sys.path.insert(0,'iot_md_management/rootfs/app');import management_portal;print(management_portal.HTML)"],{cwd:new URL('..',import.meta.url),encoding:'utf8'});
+  const card=html.split('\n').find(line=>line.startsWith('function activeDeploymentCard('));
+  assert.match(card,/progressTraceLink\(deployment\).*stopTrackingBadge\(deployment\).*updateCancelAllBadge\(deployment\).*statusBadge\(deployment.status\)/);
+  assert.match(html,/const terminal=new Set\(\['complete','failed','partial','staged','cancelled','unresolved'\]\)/);
+  assert.match(html,/warn=\['unresolved'/);
 });

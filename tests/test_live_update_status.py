@@ -31,6 +31,8 @@ class LiveStatusTests(unittest.TestCase):
         self.paths = []
         self.status = {'api_version': 3, 'boot_id': 'boot-one',
             'device': {'device_id': 'real-device', 'release_sequence': 2822, 'firmware_release_sequence': 2822}, 'fleet': {}}
+        self.store.record_device_versions(self.identifier, dict(self.status['device'],
+            application_version='alpha118', firmware_version='alpha118'))
         self.delay = lambda path: 3
         self.health = {'api_version': 3, 'health': {}}
         self.compact = True
@@ -164,6 +166,8 @@ class LiveStatusTests(unittest.TestCase):
     def test_inline_cancellation_acknowledgement_avoids_another_read_and_any_write(self):
         self.store.set_deployment_target(self.deployment['id'], self.identifier, 'cancelling')
         self.status['device']['release_sequence'] = 2821
+        self.store.record_device_versions(self.identifier, dict(self.status['device'],
+            application_version='alpha117', firmware_version='alpha118'))
         self.status['cancellation'] = {'status': 'cancelled', **self.update}
         self.controller.poll_progress(self.identifier)
         self.assertEqual(self.result()['status'], 'cancelled')
@@ -219,25 +223,27 @@ class LiveStatusTests(unittest.TestCase):
         self.controller.poll_device = mock.Mock()
         client = mock.Mock(last_request_key=None)
         self.controller._client = mock.Mock(return_value=client)
-        client.request.return_value = {'api_version': 3, 'accepted': True}
+        client.request.return_value = {'api_version': 3, 'accepted': True, 'capabilities': {'update_operation_contract': 1}}
         request = {'device_id': self.identifier, 'commands': [
             {'action': 'download-update', 'release_sequence': 2822, 'release_type': 'universal'}]}
         self.controller.apply_policy(request, deployment_id=self.deployment['id'])
         self.controller.poll_device.assert_called_once_with(self.identifier)
-        self.assertEqual(client.request.call_count, 1)
+        self.assertEqual(client.request.call_count, 2)  # capability discovery + one write
         self.controller.poll_device.reset_mock()
-        def uncertain(*args):
+        def uncertain(path, *args):
+            if path == '/api/v3':
+                return {'api_version': 3, 'capabilities': {'update_operation_contract': 1}}
             client.last_request_key = '1.0123456789abcdef'
             raise TimeoutError('POST acknowledgement lost')
         client.request.side_effect = uncertain
         result = self.controller.apply_policy(request, deployment_id=self.deployment['id'])
         self.assertTrue(result['uncertain'])
         self.controller.poll_device.assert_called_once_with(self.identifier)
-        self.assertEqual(client.request.call_count, 2)
+        self.assertEqual(client.request.call_count, 4)
         self.assertEqual(self.result()['status'], 'checking')
         self.assertIn('without replay', self.result()['detail'])
         self.controller.execute_deployment_target(self.deployment['id'], self.identifier)
-        self.assertEqual(client.request.call_count, 2)
+        self.assertEqual(client.request.call_count, 4)
 
 
 class LiveStatusLoadTests(unittest.TestCase):

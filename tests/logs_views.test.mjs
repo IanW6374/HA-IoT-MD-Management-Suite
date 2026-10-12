@@ -25,6 +25,16 @@ test('mixed intentional cancellations are amber, while genuine failures remain r
 test('logs default to activity, audit is a distinct explicit view',()=>{
   const ctx=context();assert.equal(vm.runInContext('logView()',ctx),'activity');ctx.location.search='?view=audit';assert.equal(vm.runInContext('logView()',ctx),'audit');
 });
+test('retired deployment is retained in searchable history as unresolved, never cancelled or successful',()=>{
+  const controls={'action-history':{},'action-history-filter':{value:'all'},'action-history-search':{value:'unresolved'}};
+  const deployment={id:'old',created_at:3,targets:['done','pending'],results:{done:{status:'complete'},pending:{status:'unresolved',detail:'Tracking stopped locally; device outcome unconfirmed'}},status:'unresolved',update:{version:'alpha120'}};
+  const ctx=context({state:{devices:[],deployments:[deployment],backups:[],seedJobs:[]},backupState:{},deployment,document:{getElementById:id=>controls[id]},matchesCatalogSearch:(values,query)=>values.join(' ').includes(query),deploymentHistoryItem:item=>'<history>'+item.status+'</history>',replacePreservingDetails:(box,html)=>box.innerHTML=html,revealRequestedBackup:()=>{}});
+  vm.runInContext('renderActionHistory()',ctx);
+  assert.equal(controls['action-history'].innerHTML,'<history>unresolved</history>');
+  const dot=vm.runInContext('deploymentOutcomeDot(deployment)',ctx);
+  assert.match(dot,/log-dot warn/);assert.match(dot,/unresolved — 1 complete, 1 unresolved/);
+  assert.doesNotMatch(dot,/log-dot good|partly cancelled/);
+});
 test('activity search filters deployments, backups and USB outcomes without losing disclosure state',()=>{
   const controls={'action-history':{},'action-history-filter':{value:'all'},'action-history-search':{value:'BOILER'}};
   const state={devices:[{id:'one.local',name:'Boiler'}],deployments:[{id:'d1',created_at:3,targets:['one.local'],results:{},status:'complete',update:{version:'alpha.102'}}],backups:[{id:1,created_at:2,device_name:'Boiler'}],seedJobs:[{id:'s1',created_at:1,status:'failed',image:'factory.bin',detail:'Port closed'}]};

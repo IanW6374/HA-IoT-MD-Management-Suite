@@ -4,3 +4,4 @@
 @media(max-width:900px){.universal-flow{overflow-x:auto;padding:6px 4px}.universal-flow>.fleet-flow{min-width:900px}.operation-table{min-width:650px}.operation-filters label{flex:1}.operation-filters button{min-height:42px}}@media(prefers-reduced-motion:reduce){.operation-browser *{scroll-behavior:auto}}
 .operation-table .target-result{display:table-row;padding:0;border:0}.operation-stage-detail{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.operation-table .target-result td:nth-child(2) .operation-stage-detail{margin-top:4px}
 .operation-table .operation-freshness{margin-top:4px}.operation-table .operation-freshness.warn{color:var(--warn)}
+.deployment .update-cancel-feedback{display:block;margin-top:6px;color:var(--warn);font-size:.75rem;overflow-wrap:anywhere}

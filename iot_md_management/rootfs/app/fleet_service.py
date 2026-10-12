@@ -13,6 +13,7 @@ import urllib.error
 import urllib.request
 
 from progress_traces import clean_traces, copy_trace, failure_reason, retain_attempt
+from update_operation_contract import reduce_operation
 
 
 BACKUP_KDF_ITERATIONS = 120000
@@ -354,6 +355,7 @@ class FleetController:
         self._progress_clients = {}
         self._api_reads = {}
         self._progress_traces = {}
+        self._operation_observation_lock = threading.RLock()
 
     def _action_lock(self, identifier):
         with self._action_locks_guard:
@@ -573,6 +575,7 @@ class FleetController:
         stage = 'inventory'
         try:
             inventory = self._read_device(identifier, client, '/api/v3/device/inventory')
+            self._record_installed_versions(identifier, inventory.get('device'), '/api/v3/device/inventory')
             self._progress_observed(identifier, started, received=True)
             # Publish observed transfer/staging boundaries before slower health,
             # configuration or log reads. This is not installation confirmation
@@ -701,6 +704,7 @@ class FleetController:
         client = None
         workflow_stage = 'discovery'
         boot_id = ''
+        rediscover = False
         try:
             client = self._progress_client(record)
             if isinstance(client, DeviceClient):
@@ -721,20 +725,28 @@ class FleetController:
             client.deadline = time.monotonic() + self.progress_timeout
             compact = (isinstance(client, DeviceClient) and
                        bool((client.api_metadata or {}).get('capabilities', {}).get('live_update_status')))
+            tracked = [item for item in deployments if
+                item['results'].get(identifier, {}).get('dispatch', {}).get('update_operation_id')]
             # Existing API v3 devices can receive the upgrade which introduces
             # this capability. Never fall back to v2 or bypass authentication.
             path = '/api/v3/fleet/update-status' if compact else '/api/v3/device/inventory'
+            if tracked:
+                operation_id = tracked[0]['results'][identifier]['dispatch']['update_operation_id']
+                path = '/api/v3/fleet/update-operations/' + operation_id
+                if len(tracked) != 1:
+                    raise ValueError('More than one device update operation is being tracked')
             if isinstance(client, DeviceClient):
                 client.response_limit = 65536 if compact else 16 * 1024 * 1024
             inventory = self._read_device(identifier, client, path)
             if not isinstance(inventory.get('device'), dict) or not isinstance(inventory.get('fleet') or {}, dict):
                 raise ValueError('Invalid live device status response')
-            if compact and not isinstance(inventory.get('fleet'), dict):
+            if compact and not tracked and not isinstance(inventory.get('fleet'), dict):
                 raise ValueError('Invalid live fleet status response')
             expected_id = ((record.get('inventory') or {}).get('device') or {}).get('device_id')
             if expected_id and inventory['device'].get('device_id') != expected_id:
                 raise ValueError('Live device identity does not match the enrolled device')
             boot_id = str(inventory.get('boot_id') or '')
+            versions = self.store.record_device_versions(identifier, inventory['device'])
             observed = {**record, 'inventory': inventory, 'fleet': inventory.get('fleet') or {}}
             received = True
             self._progress_observed(identifier, started, received=True)
@@ -744,6 +756,8 @@ class FleetController:
             candidates = []
             for deployment in self.store.active_deployments():
                 result = deployment['results'].get(identifier, {})
+                if result.get('dispatch', {}).get('update_operation_id'):
+                    continue  # Local operation confirmation, never version inference.
                 if result.get('status') not in ('checking', 'staging', 'staged', 'scheduled', 'installing', 'cancelling'):
                     continue
                 update = deployment.get('update') or {}
@@ -763,10 +777,11 @@ class FleetController:
                 if isinstance(client, DeviceClient):
                     # The next deployment must rediscover post-upgrade API
                     # capabilities, while retaining the verified TLS context.
-                    client.api_metadata = None
+                    rediscover = True
             # Cancellation acknowledgement is a read, never a replay of its POST.
             cancelling = [item for item in self.store.active_deployments()
-                if item['results'].get(identifier, {}).get('status') == 'cancelling']
+                if item['results'].get(identifier, {}).get('status') == 'cancelling' and
+                not item['results'].get(identifier, {}).get('dispatch', {}).get('update_operation_id')]
             if cancelling:
                 workflow_stage = 'cancellation'
                 if compact:
@@ -782,6 +797,8 @@ class FleetController:
                         self.store.set_deployment_target(deployment['id'], identifier,
                             'cancelled', 'Update cancelled; staged data discarded')
             self._progress_observed(identifier, started, received=True)
+            if compact:
+                self._refresh_progress_versions(identifier, client, inventory['device'], versions)
         except Exception as exc:
             failure = failure_reason(exc)
             # A slow status/health response doesn't invalidate successful API
@@ -794,6 +811,8 @@ class FleetController:
             self._mark_immediate_install_restart(identifier)
             raise
         finally:
+            if rediscover and isinstance(client, DeviceClient):
+                client.api_metadata = None
             with self._progress_lock:
                 diagnostic = self._progress_reads.get(identifier, {})
                 previous_boot = diagnostic.get('boot_id', '')
@@ -814,6 +833,62 @@ class FleetController:
                 self._progress_traces[identifier] = traces
             # One durable diagnostic write per live workflow, not per HTTP read.
             self.store.record_progress_poll(identifier, self._poll_state(identifier), traces)
+
+    def _refresh_progress_versions(self, identifier, client, observed, cached):
+        """Occasional bounded read for missing labels; never a device mutation."""
+        fields = ('release_sequence', 'firmware_release_sequence')
+        if not isinstance(observed.get('device_id'), str) or not 0 < len(observed['device_id']) <= 128:
+            return
+        if any(not isinstance(observed.get(field), int) or isinstance(observed.get(field), bool)
+               or not 0 <= observed[field] <= 9007199254740991 for field in fields):
+            return
+        cached = cached or {}
+        if all(cached.get(field) == observed[field] for field in fields) and all(
+                cached.get(field) for field in ('application_version', 'firmware_version')):
+            self._version_evidence(identifier, cached, '/api/v3/fleet/update-status')
+            return
+        previous = self._poll_state(identifier).get('versions') or {}
+        sequences = [observed[field] for field in fields]
+        if previous.get('sequences') == sequences and previous.get('next_retry_at', 0) > self.now():
+            return
+        state = {'sequences': sequences, 'source': '/api/v3/device', 'received_at': 0,
+                 'error': '', 'next_retry_at': 0}
+        try:
+            client.deadline = time.monotonic() + self.progress_timeout
+            value = self._read_device(identifier, client, '/api/v3/device').get('device')
+            if (not isinstance(value, dict) or value.get('device_id') != observed.get('device_id') or
+                    any(not isinstance(value.get(field), int) or isinstance(value.get(field), bool)
+                        or value.get(field) != observed[field] for field in fields) or
+                    any(not isinstance(value.get(field), str) or not 0 < len(value[field]) <= 96 or
+                        any(ord(c) < 32 for c in value[field])
+                        for field in ('application_version', 'firmware_version'))):
+                raise ValueError('Installed version read does not match the observed device/components')
+            self.store.record_device_versions(identifier, value)
+            state['received_at'] = self.now()
+        except Exception as exc:
+            # Status/cancellation evidence already received remains valid. Only
+            # the optional labels stay unknown; never turn this into job failure.
+            state.update(error=device_connection_error(exc), next_retry_at=self.now() + 30)
+        with self._progress_lock:
+            self._api_reads.setdefault(identifier, {})['versions'] = state
+
+    def _record_installed_versions(self, identifier, device, source):
+        cached = self.store.record_device_versions(identifier, device) or {}
+        if not isinstance(device, dict):
+            return
+        fields = ('release_sequence', 'firmware_release_sequence')
+        if (any(not isinstance(device.get(field), int) or isinstance(device.get(field), bool)
+                or device[field] != cached.get(field) for field in fields) or
+                any(not device.get(field) or device.get(field) != cached.get(field)
+                    for field in ('application_version', 'firmware_version'))):
+            return
+        self._version_evidence(identifier, cached, source)
+
+    def _version_evidence(self, identifier, device, source):
+        with self._progress_lock:
+            self._api_reads.setdefault(identifier, {})['versions'] = {
+                'sequences': [device[field] for field in ('release_sequence', 'firmware_release_sequence')], 'source': source,
+                'received_at': self.now(), 'error': '', 'next_retry_at': 0}
 
     @staticmethod
     def _update_installed(record, update):
@@ -880,6 +955,8 @@ class FleetController:
         if not hasattr(self.store, 'list_deployments'):
             return
         for deployment in self.store.active_deployments():
+            if deployment['results'].get(identifier, {}).get('dispatch', {}).get('update_operation_id'):
+                continue  # Timeout is connectivity, not an installation boundary.
             if (
                 deployment.get('activation') != 'now' or
                 identifier not in deployment.get('targets', ())
@@ -902,6 +979,11 @@ class FleetController:
             if identifier not in deployment['targets']:
                 continue
             current = deployment['results'].get(identifier, {}).get('status', '')
+            if deployment['results'].get(identifier, {}).get('dispatch', {}).get('update_operation_id'):
+                operation = (record.get('inventory') or {}).get('update_operation')
+                if operation:
+                    self.observe_update_operation(deployment['id'], identifier, operation)
+                continue
             if current == 'cancelling':
                 if progress_only:
                     continue
@@ -1130,6 +1212,26 @@ class FleetController:
         with self._action_lock(identifier):
             return self._execute_deployment_target(deployment_id, identifier)
 
+    def observe_update_operation(self, deployment_id, identifier, value):
+        """One ordered projection for API snapshots and authenticated push reports."""
+        with self._operation_observation_lock:
+            deployment = self.store.get_deployment(deployment_id)
+            result = (deployment or {}).get('results', {}).get(identifier, {})
+            if not deployment or deployment['status'] == 'unresolved' or result.get('status') in (
+                    'complete', 'failed', 'cancelled', 'unresolved'):
+                return False
+            dispatch = result.get('dispatch') or {}
+            projection = reduce_operation(value, dispatch, dispatch.get('device_id'),
+                                          deployment.get('update') or {}, result.get('update_operation'))
+            if projection is None:
+                return False
+            status = projection['status']
+            if status == 'staged' and deployment.get('activation') != 'stage':
+                status = 'scheduled'
+            self.store.set_deployment_target(deployment_id, identifier, status,
+                projection['detail'], progress=projection['progress'], operation=projection['operation'])
+            return True
+
     def cancel_deployment_target(self, deployment_id, identifier):
         with self._action_lock(identifier):
             deployment = self.store.get_deployment(deployment_id)
@@ -1139,7 +1241,7 @@ class FleetController:
             if not update:
                 raise ValueError('only update deployments can be cancelled')
             current = deployment['results'].get(identifier, {}).get('status', 'queued')
-            if current in ('complete', 'failed', 'cancelled'):
+            if current in ('complete', 'failed', 'cancelled', 'unresolved'):
                 return deployment
             if current == 'installing':
                 raise ValueError('Installation has begun; wait for confirmation before using rollback')
@@ -1161,6 +1263,8 @@ class FleetController:
                 result = client.request('/api/v3/fleet/update-cancel', 'POST', {
                     'release_sequence': update['release_sequence'],
                     'release_type': update['release_type'],
+                    **({'update_operation_id': deployment['results'][identifier]['dispatch']['update_operation_id']}
+                       if deployment['results'].get(identifier, {}).get('dispatch', {}).get('update_operation_id') else {}),
                 })
             except DeviceMutationRejected as exc:
                 self.store.set_deployment_target(deployment_id, identifier, current,
@@ -1172,6 +1276,24 @@ class FleetController:
                 result['status'], 'Update cancelled; staged data discarded' if
                 result['status'] == 'cancelled' else 'Waiting for staging to stop safely')
 
+    def stop_tracking_deployment(self, deployment_id, confirmation):
+        if confirmation != 'stop tracking ' + str(deployment_id):
+            raise ValueError('Explicit confirmation is required to stop Management tracking')
+        deployment = self.store.get_deployment(deployment_id)
+        if not deployment:
+            raise ValueError('deployment does not exist')
+        acquired = []
+        try:
+            for identifier in sorted(deployment['targets']):
+                lock = self._action_lock(identifier)
+                if not lock.acquire(blocking=False):
+                    raise ValueError('A Management device request is still running; wait for it to settle before stopping tracking')
+                acquired.append(lock)
+            return self.store.stop_tracking_deployment(deployment_id)
+        finally:
+            for lock in reversed(acquired):
+                lock.release()
+
     def _execute_deployment_target(self, deployment_id, identifier):
         deployment = self.store.get_deployment(deployment_id)
         if not deployment:
@@ -1179,7 +1301,7 @@ class FleetController:
         if identifier not in deployment['targets']:
             raise ValueError('device is not part of this deployment')
         current = deployment['results'].get(identifier, {})
-        if current.get('status') in ('complete', 'failed', 'cancelled') or (
+        if current.get('status') in ('complete', 'failed', 'cancelled', 'unresolved') or (
             current.get('status') == 'staged' and deployment['activation'] == 'stage'
         ):
             # Old retry jobs must not resurrect an action from history.
@@ -1195,7 +1317,7 @@ class FleetController:
                 if other['id'] == deployment_id or identifier not in other['targets']:
                     continue
                 status = other['results'].get(identifier, {}).get('status', 'queued')
-                if status not in ('queued', 'complete', 'failed', 'cancelled') and not (
+                if status not in ('queued', 'complete', 'failed', 'cancelled', 'unresolved') and not (
                     status == 'staged' and other['activation'] == 'stage'
                 ):
                     raise ValueError('Device already has an in-flight deployment: ' + other['id'])
@@ -1390,14 +1512,14 @@ class FleetController:
                 '', 'application', 'firmware', 'universal')
                for command in commands):
             raise ValueError('deployment update type is invalid')
+        client = self._client(record, max(30, self.timeout))
+        operation_id = None
         if deployment_id is not None:
-            device = (record.get('inventory') or {}).get('device') or {}
-            self.store.set_deployment_target(deployment_id, target, 'checking',
-                'Deployment accepted; checking update compatibility', dispatch={
-                    'baseline': {name: int(device.get(name, 0) or 0) for name in
-                        ('release_sequence', 'firmware_release_sequence')},
-                    'command_ids': [command['id'] for command in commands],
-                })
+            metadata = client.request('/api/v3')
+            if metadata.get('capabilities', {}).get('update_operation_contract') != 1:
+                raise ValueError('Update IoT-MD locally to the device-owned operation release before deploying; legacy inferred tracking is retired')
+            operation_id = secrets.token_hex(16)
+            commands[0]['id'] = operation_id
         policy = {
             'format_version': 2,
             'target_board': 'esp32-s3',
@@ -1426,7 +1548,16 @@ class FleetController:
             'commands': commands,
         }
         signed = self.signer.sign(policy)
-        client = self._client(record, max(30, self.timeout))
+        if deployment_id is not None:
+            device = (record.get('inventory') or {}).get('device') or {}
+            self.store.set_deployment_target(deployment_id, target, 'checking',
+                'Submitting signed device-owned update operation', dispatch={
+                    'baseline': {name: int(device.get(name, 0) or 0) for name in
+                        ('release_sequence', 'firmware_release_sequence')},
+                    'command_ids': [command['id'] for command in commands],
+                    'update_operation_id': operation_id, 'policy_sequence': policy['policy_sequence'],
+                    'device_id': device_target,
+                })
         # Bound a dripping POST response too. An uncertain outcome is durably
         # handed to reconciliation below, never retried on a second worker.
         client.deadline = time.monotonic() + 2 * max(30, self.timeout)
@@ -1465,30 +1596,14 @@ class FleetController:
             value['id'] for value in self.store.list_devices(public=False)
             if value.get('enabled') and value.get('cohort') == cohort
         ]
-        results = {}
-        for device_id in targets:
-            try:
-                results[device_id] = self.apply_policy({
-                    'device_id': device_id, 'channel': rollout['channel'],
-                    'automatic_download': True, 'automatic_activation': True,
-                    'maximum_failures': rollout['maximum_failures'],
-                    'commands': [
-                        {
-                            'action': action,
-                            'release_sequence': rollout['release_sequence'],
-                            'release_type': rollout.get('release_type', ''),
-                        }
-                        for action in ('check-update', 'download-update')
-                    ],
-                })
-            except Exception as exc:
-                results[device_id] = {'error': bounded_text(exc)}
-                self.store.record_rollout_result(
-                    identifier, device_id, 'failed', str(exc)
-                )
-                if self.store.get_rollout(identifier)['status'] == 'stopped':
-                    break
-        return {
-            'rollout': self.store.get_rollout(identifier),
-            'dispatch': results,
-        }
+        if not targets:
+            raise ValueError('The active rollout cohort has no enabled devices')
+        deployment_id = 'rollout-deployment-' + secrets.token_hex(12)
+        # Cohorts use the same durable queue, bounded handlers and exact
+        # operation reducer as ordinary update actions, not a sequential POST loop.
+        self.store.set_metadata('operation-rollout:' + deployment_id, identifier)
+        deployment = self.create_deployment({'id': deployment_id, 'targets': targets,
+            'activation': 'schedule', 'update': {'channel': rollout['channel'],
+                'release_sequence': rollout['release_sequence'], 'release_type': rollout['release_type']}})
+        return {'rollout': self.store.get_rollout(identifier), 'deployment': deployment,
+                'dispatch': {target: {'queued': True} for target in targets}}

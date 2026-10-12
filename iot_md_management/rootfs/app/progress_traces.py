@@ -14,7 +14,8 @@ READS = 6
 STAGES = ('reservation', 'tls_context', 'connect/headers', 'body', 'decode')
 WORKFLOWS = ('discovery', 'status', 'confirmation', 'cancellation')
 PATHS = ('/api/v3', '/api/v3/fleet/update-status', '/api/v3/device/inventory',
-         '/api/v3/health', '/api/v3/fleet/update-cancel')
+         '/api/v3/health', '/api/v3/fleet/update-cancel', '/api/v3/device',
+         '/api/v3/fleet/update-operations/<operation-id>')
 
 
 def number(value):
@@ -63,9 +64,13 @@ def clean_attempt(value):
     for read in (value.get('reads') if isinstance(value.get('reads'), list) else [])[-READS:]:
         if not isinstance(read, dict):
             continue
+        path = read.get('path', '').split('?', 1)[0] if isinstance(read.get('path'), str) else 'other'
+        prefix = '/api/v3/fleet/update-operations/'
+        if path.startswith(prefix) and len(path[len(prefix):]) == 32 and all(
+                char in '0123456789abcdef' for char in path[len(prefix):]):
+            path = prefix + '<operation-id>'
         reads.append({
-            'path': read.get('path', '').split('?', 1)[0] if isinstance(read.get('path'), str)
-                and read['path'].split('?', 1)[0] in PATHS else 'other',
+            'path': path if path in PATHS else 'other',
             'stage': read.get('stage') if read.get('stage') in STAGES else 'unknown',
             'start_offset_ms': number(read.get('start_offset_ms')),
             'budget_ms': number(read.get('budget_ms')),

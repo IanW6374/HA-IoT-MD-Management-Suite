@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 3.2.11', addon)
+        self.assertIn('version: 3.2.12', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('device_worker_limit: 8', addon)
         self.assertIn('device_worker_limit: int(2,32)', addon)
@@ -71,6 +71,31 @@ class FleetAddonTests(unittest.TestCase):
             handler.do_GET()
             self.assertIn('progress_reads', handler._json.call_args.args[1])
             transport.assert_not_called()
+
+    def test_stop_tracking_route_is_management_only_and_requires_confirmation(self):
+        store = self.module.STORE
+        store.register({'id': 'tracking-test', 'host': 'tracking-test.local'})
+        deployment = store.create_deployment({'update': {'release_sequence': 2825,
+            'release_type': 'universal'}}, ['tracking-test'])
+        store.set_deployment_target(deployment['id'], 'tracking-test', 'cancelling')
+        handler = object.__new__(self.module.Handler)
+        handler._json = mock.Mock()
+        handler.path = '/api/deployments/stop-tracking'
+        handler._body = mock.Mock(return_value={'deployment_id': deployment['id'], 'confirmation': ''})
+        with mock.patch.object(self.module.CONTROLLER, '_client', side_effect=AssertionError('No device I/O')):
+            handler.do_POST()
+            self.assertEqual(handler._json.call_args.args[0], 400)
+            self.assertEqual(store.get_deployment(deployment['id'])['status'], 'active')
+            handler._body.return_value['confirmation'] = 'stop tracking ' + deployment['id']
+            handler.do_POST()
+            self.assertEqual(handler._json.call_args.args[0], 200)
+            self.assertEqual(handler._json.call_args.args[1]['status'], 'unresolved')
+            handler.path = '/api/deployments?view=active'
+            handler.do_GET()
+            self.assertNotIn(deployment['id'], [item['id'] for item in handler._json.call_args.args[1]['deployments']])
+            handler.path += '&include=' + deployment['id']
+            handler.do_GET()
+            self.assertEqual(handler._json.call_args.args[1]['deployments'][0]['status'], 'unresolved')
 
     def test_live_deployment_reads_omit_history_but_include_requested_terminal_transitions(self):
         store = self.module.STORE
@@ -114,7 +139,7 @@ class FleetAddonTests(unittest.TestCase):
         self.assertNotIn('secret', json.dumps(data))
         self.assertTrue(data['scheduler']['devices']['trace-device']['last_read_failed'])
         self.assertIn('${progressTraceLink(deployment)}</details>', self.module.HTML)
-        self.assertIn('${progressTraceLink(deployment)}${updateCancelAllBadge(deployment)}', self.module.HTML)
+        self.assertIn('${progressTraceLink(deployment)}${stopTrackingBadge(deployment)}${updateCancelAllBadge(deployment)}', self.module.HTML)
 
     def test_trace_download_sets_attachment_and_no_cache_headers(self):
         handler = object.__new__(self.module.Handler)
@@ -526,7 +551,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         self.assertIn("deploymentSection?.classList.toggle('hidden',!active.length)", self.module.HTML)
         self.assertIn("emptySection?.classList.toggle('hidden',!!active.length||!!backupCount)", self.module.HTML)
         self.assertNotIn('No deployments are currently in flight.', self.module.HTML)
-        self.assertIn("const terminal=new Set(['complete','failed','partial','staged','cancelled'])", self.module.HTML)
+        self.assertIn("const terminal=new Set(['complete','failed','partial','staged','cancelled','unresolved'])", self.module.HTML)
         self.assertIn('active.map(activeDeploymentCard)', self.module.HTML)
         self.assertIn('html:deploymentHistoryItem(item)', self.module.HTML)
         self.assertIn('class="timeline"', self.module.HTML)
@@ -1429,16 +1454,13 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         from fleet_service import FleetController
         controller = FleetController(store, None)
         controller.apply_policy = mock.Mock(return_value={'accepted': True})
-        controller.dispatch_rollout(rollout['id'])
-        dispatched = controller.apply_policy.call_args.args[0]
-        self.assertEqual(
-            [command['action'] for command in dispatched['commands']],
-            ['check-update', 'download-update'],
-        )
-        self.assertEqual(
-            {command['release_type'] for command in dispatched['commands']},
-            {'application'},
-        )
+        store.record_poll('canary-1', {'configuration': {'automatic_updates': {'schedule': 'daily', 'time': '02:00'}}}, {}, {})
+        dispatched = controller.dispatch_rollout(rollout['id'])
+        controller.apply_policy.assert_not_called()
+        self.assertEqual(dispatched['deployment']['targets'], ['canary-1'])
+        self.assertEqual(dispatched['deployment']['update']['release_type'], 'application')
+        self.assertEqual(dispatched['deployment']['status'], 'queued')
+        self.assertEqual(store.metadata('operation-rollout:' + dispatched['deployment']['id']), rollout['id'])
         store.record_rollout_result(rollout['id'], 'canary-1', 'complete')
         advanced = store.advance_rollout(rollout['id'])
         self.assertEqual(advanced['cohort_index'], 1)
@@ -2092,7 +2114,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         failure = urllib.error.HTTPError('https://one.local:8444/api/v3/fleet/policy', 503,
             'Unavailable', {}, io.BytesIO(json.dumps(response).encode()))
         discovery = io.BytesIO(json.dumps({'api_version': 3,
-            'capabilities': {'persistent_idempotency': True}, 'next_request_sequence': 1}).encode())
+            'capabilities': {'persistent_idempotency': True, 'update_operation_contract': 1}, 'next_request_sequence': 1}).encode())
         with mock.patch.object(DeviceClient, '_context', return_value=object()), \
              mock.patch('fleet_service.urllib.request.urlopen', side_effect=[discovery, failure]) as transport:
             with self.assertRaises(DeviceMutationRejected):
@@ -2542,7 +2564,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         signer.sign.side_effect = lambda policy: policy
         controller = FleetController(store, signer)
         client = mock.Mock()
-        client.request.return_value = {'accepted': True}
+        client.request.return_value = {'accepted': True, 'capabilities': {'update_operation_contract': 1}}
         controller._client = mock.Mock(return_value=client)
         controller.poll_device = mock.Mock(return_value=store.get_device('one'))
         controller.execute_deployment_target(deployment['id'], 'one')
@@ -2566,6 +2588,16 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         record = {'inventory': {'device': {'release_sequence': 2816,
             'firmware_release_sequence': 2816}}, 'fleet': {'policy': {'commands': sent['commands']}}}
         # A fast restart can finish between polls, without an observed trial.
+        controller._reconcile_deployments('one', record)
+        self.assertEqual(store.get_deployment(deployment['id'])['results']['one']['status'], 'staging')
+        # New jobs are completed only by the exact retained device operation.
+        record['inventory']['update_operation'] = {'contract': 1,
+            'id': dispatch['update_operation_id'], 'device_id': 'immutable-one',
+            'policy_sequence': dispatch['policy_sequence'], 'release_sequence': 2816,
+            'release_type': 'universal', 'state': 'complete', 'phase': 'complete',
+            'revision': 10, 'boot_id': 'confirmed-boot', 'sample_sequence': 0, 'percent': None,
+            'detail': 'Confirmed by local startup health', 'completed': ['queued', 'inspect',
+                'core_write', 'core_verify', 'application_download', 'application_verify', 'pair', 'install', 'complete']}
         controller._reconcile_deployments('one', record)
         self.assertEqual(store.get_deployment(deployment['id'])['results']['one']['status'], 'complete')
 

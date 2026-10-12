@@ -9,6 +9,13 @@ const {JSDOM}=require(process.env.IOT_UI_NODE_MODULES ? `${process.env.IOT_UI_NO
 const source=fs.readFileSync(new URL('../iot_md_management/rootfs/app/assets/deployment_status.js',import.meta.url),'utf8');
 const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
 const job=(revision,status)=>({id:'job',revision,status,targets:['one'],results:{one:{status}}});
+test('retired tracking cannot be resurrected by an old read or late mutation acknowledgement',async()=>{
+ const {context}=fixture(async()=>({deployments:[job(99,'active')]}),[job(5,'unresolved')]);
+ vm.runInContext("applyDeploymentSnapshot({id:'job',revision:99,status:'active',targets:['one'],results:{one:{status:'cancelling'}}})",context);
+ assert.equal(context.state.deployments[0].status,'unresolved');
+ await vm.runInContext('refreshDeploymentProgress()',context);
+ assert.equal(context.state.deployments[0].status,'unresolved');
+});
 test('periodic workspace refresh is scoped, single-flight and visibility aware',async()=>{
  let calls=0,release;
  const document={hidden:false,body:{dataset:{page:'actions'}},addEventListener(){}};

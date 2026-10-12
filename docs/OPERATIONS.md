@@ -2,6 +2,29 @@
 
 ## Live update monitoring
 
+Use **Stop tracking** on an In-Flight deployment only when you deliberately want
+Management to stop monitoring it. Confirm the warning: this does not cancel,
+discard, roll back or reset anything on the device, which may continue updating.
+Check its actual state before starting another action. Known results remain
+unchanged; unfinished targets are recorded as **unresolved**, with their prior
+state/detail and milestones retained in searchable activity history. Diagnostics
+and an explicit Management-only audit entry remain available. The local queue
+and tracking state are retired atomically, including orphaned dispatch records.
+An actual local mutation still holding a device action lock must settle first.
+Late reports cannot reopen tracking or claim a confirmed cancellation. Repeating
+this local retirement request is idempotent; it never replays a device mutation.
+
+Installed-version evidence is independent of job outcome and full health-report
+freshness. Successful inventory reads persist component labels/release numbers
+even when later configuration, health or log reads fail. Compact live reads
+invalidate older labels when release numbers change. Missing labels are fetched
+with one bounded, read-only `/api/v3/device` request after status/cancellation
+reconciliation, not a full configuration/event poll. Failed label reads retry
+no sooner than 30 seconds for that component pair; successful labels are reused
+while the observed pair is unchanged. Unknown labels stay visibly unknown with
+an explanatory tooltip, rather than showing an earlier release as current.
+This does not declare cached health fresh or complete/cancel an older job.
+
 `device_worker_limit` bounds admitted device work (2–32, default 8); half of the
 handlers are reserved for live progress. Each device still has one scheduled
 handler at a time. Accepted deployment submissions hand off to live monitoring
@@ -162,3 +185,25 @@ Only `GET` and `HEAD` are accepted on port 8443. The listener exposes channel
 `latest.json` descriptors, bounded `versions.json` inventories and immutable files
 below `/bundles`; all other paths return 404. Release administration and file
 browsing are available only through Home Assistant-authenticated Ingress.
+
+## Device-owned update tracking (3.2.12)
+
+Install IoT-MD Alpha 123 on devices using their portal or the previous Management
+release before upgrading Management to 3.2.12. New jobs require operation contract
+1; there is no legacy version-inference fallback for newly dispatched updates.
+Once upgraded, use a strictly newer signed test release to exercise deployment.
+
+Management stores each device's operation ID before submitting a signed policy.
+Authenticated API snapshots of that exact operation are the job authority.
+Installed versions, API connection health and observation freshness are separate.
+A timeout leaves the last observation visible and never means installed/cancelled.
+An interrupted device operation is unresolved history, not a successful update.
+
+Cancellation addresses the exact operation and is refused after activation starts.
+Stop tracking retires only Management's job and never sends a device command.
+Old stuck jobs can be retired this way; their history is not rewritten as success.
+
+Cohort rollouts use the normal queued update workflow and bounded handlers.
+Cancelled/unresolved cohort targets do not pass the advancement gate.
+This release is API-only. MQTT reporting is not enabled, pending an approved
+trusted broker destination and authenticated report transport.

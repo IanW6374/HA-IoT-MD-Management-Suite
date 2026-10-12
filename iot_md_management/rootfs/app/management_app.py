@@ -505,6 +505,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/deployments/cancel':
                 self._json(200, CONTROLLER.cancel_deployment_target(
                     str(request.get('deployment_id', '')), str(request.get('device_id', ''))))
+            elif path == '/api/deployments/stop-tracking':
+                self._json(200, CONTROLLER.stop_tracking_deployment(
+                    str(request.get('deployment_id', '')), str(request.get('confirmation', ''))))
             elif path == '/api/profiles':
                 profile = STORE.save_profile(normalize_profile(request))
                 STORE.record_audit(

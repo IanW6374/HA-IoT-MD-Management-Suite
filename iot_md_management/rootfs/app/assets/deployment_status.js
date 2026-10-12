@@ -19,6 +19,7 @@ function visibleWorkspaceData(name){
 function applyDeploymentSnapshot(incoming) {
   const index=state.deployments.findIndex(item=>item.id===incoming.id);
   if(index<0)return;
+  if(state.deployments[index].status==='unresolved'&&incoming.status!=='unresolved')return;
   if(Number(incoming.revision||0)<Number(state.deployments[index].revision||0))return;
   state.deployments[index]=incoming;
 }
@@ -29,7 +30,7 @@ function renderDeploymentStatus(historyChanged=true,liveChanged=true) {
   if(historyChanged)renderActionHistory();
   if(trackedDeploymentId){
     const tracked=state.deployments.find(item=>item.id===trackedDeploymentId);
-    if(tracked&&['complete','failed','partial','staged','cancelled'].includes(tracked.status)){
+    if(tracked&&['complete','failed','partial','staged','cancelled','unresolved'].includes(tracked.status)){
       const status=document.getElementById('deployment-form-status');
       if(status){status.className='status';status.textContent='';}
       trackedDeploymentId='';
@@ -43,7 +44,7 @@ async function refreshDeploymentProgress() {
     try{
       // One catch-up read if a cancellation invalidated the in-flight read.
       for(let attempt=0;attempt<2;attempt++){
-        const terminal=item=>['complete','failed','partial','staged','cancelled'].includes(item.status),
+        const terminal=item=>['complete','failed','partial','staged','cancelled','unresolved'].includes(item.status),
           scoped=document.body?.dataset?.page==='actions',
           include=[...new Set([trackedDeploymentId,...state.deployments.filter(item=>!terminal(item)).map(item=>item.id)].filter(Boolean))].slice(0,64),
           endpoint=scoped?'api/deployments?view=active'+include.map(id=>'&include='+encodeURIComponent(id)).join(''):'api/deployments';
@@ -51,7 +52,7 @@ async function refreshDeploymentProgress() {
         if(!Array.isArray(result?.deployments))throw Error('Invalid deployment status response');
         if(epoch!==deploymentMutationEpoch)continue;
         const known=new Map(state.deployments.map(item=>[item.id,item]));
-        const incoming=result.deployments.map(item=>Number(item.revision||0)<Number(known.get(item.id)?.revision||0)?known.get(item.id):item);
+        const incoming=result.deployments.map(item=>known.get(item.id)?.status==='unresolved'||Number(item.revision||0)<Number(known.get(item.id)?.revision||0)?known.get(item.id):item);
         if(scoped){
           const ids=new Set(incoming.map(item=>item.id));
           incoming.push(...state.deployments.filter(item=>terminal(item)&&!ids.has(item.id)).slice(0,20));

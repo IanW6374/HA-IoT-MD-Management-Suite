@@ -583,6 +583,40 @@ class FleetRepository:
                 (str(detail)[:256], _json(poll_state) if poll_state is not None else None, str(identifier))
             )
 
+    def record_device_versions(self, identifier, device):
+        """Merge installed component evidence without refreshing health or jobs."""
+        if not isinstance(device, dict):
+            return
+        with self.lock, self.connection:
+            row = self.connection.execute('SELECT inventory FROM devices WHERE id=?',
+                                          (str(identifier),)).fetchone()
+            if row is None:
+                return
+            inventory = _object(row['inventory'], {})
+            current = inventory.setdefault('device', {})
+            if not isinstance(current, dict):
+                return
+            expected = current.get('device_id')
+            if expected and device.get('device_id') != expected:
+                return
+            before = _json(inventory)
+            for label, sequence in (('application_version', 'release_sequence'),
+                                    ('firmware_version', 'firmware_release_sequence')):
+                value = device.get(sequence)
+                if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 9007199254740991:
+                    continue
+                if value != current.get(sequence):
+                    current[label] = ''  # An older label cannot describe this sequence.
+                current[sequence] = value
+                version = device.get(label)
+                if isinstance(version, str) and 0 < len(version) <= 96 and not any(ord(c) < 32 for c in version):
+                    current[label] = version
+            if before != _json(inventory):
+                self.connection.execute('UPDATE devices SET inventory=? WHERE id=?',
+                                        (_json(inventory), str(identifier)))
+            return {field: current.get(field) for field in ('device_id', 'application_version',
+                'firmware_version', 'release_sequence', 'firmware_release_sequence')}
+
     def record_poll(self, identifier, inventory, health, events, poll_state=None):
         cursor = int(events.get('cursor', 0) or 0)
         received_at = self.now()
@@ -715,7 +749,7 @@ class FleetRepository:
                 for target in set(targets).intersection(existing['targets']):
                     result = existing['results'].get(target, {})
                     status = result.get('status', 'queued')
-                    if status not in ('complete', 'failed', 'cancelled') and not (
+                    if status not in ('complete', 'failed', 'cancelled', 'unresolved') and not (
                         status == 'staged' and existing['activation'] == 'stage'
                     ):
                         raise ValueError(target + ' already has an in-flight deployment: ' + existing['id'])
@@ -768,8 +802,8 @@ class FleetRepository:
         return [self._deployment(row) for row in rows]
 
     def set_deployment_target(self, identifier, device_id, status, detail='', progress=None,
-                              cancellation_refused=False, dispatch=None):
-        terminal = {'complete', 'failed', 'staged', 'cancelled'}
+                              cancellation_refused=False, dispatch=None, operation=None):
+        terminal = {'complete', 'failed', 'staged', 'cancelled', 'unresolved'}
         milestone_ranks = {
             'queued': 0, 'active': 0, 'running': 0,
             'checking': 1, 'staging': 1, 'staged': 2,
@@ -779,6 +813,8 @@ class FleetRepository:
             deployment = self.get_deployment(identifier)
             if not deployment:
                 raise ValueError('deployment does not exist')
+            if deployment['status'] == 'unresolved':
+                return deployment  # Late reads/workers cannot restart retired tracking.
             if device_id not in deployment['targets']:
                 raise ValueError('device is not part of this deployment')
             previous_result = deployment['results'].get(device_id, {})
@@ -788,11 +824,11 @@ class FleetRepository:
             ) or 0)
             # A late policy snapshot must not rewind an observed restart/stage.
             # Failure still remains terminal and never gains successful milestones.
-            if previous in ('complete', 'failed', 'cancelled') or (
+            if previous in ('complete', 'failed', 'cancelled', 'unresolved') or (
                 status in milestone_ranks and milestone_ranks[status] < previous_rank
             ) or (
                 previous == 'cancelling' and status not in ('cancelled', 'cancelling') and
-                not cancellation_refused and not (status == 'complete' and
+                not cancellation_refused and operation is None and not (status == 'complete' and
                     (progress or {}).get('phase') == 'complete')
             ):
                 return deployment
@@ -807,6 +843,9 @@ class FleetRepository:
             if dispatch is not None or 'dispatch' in previous_result:
                 deployment['results'][device_id]['dispatch'] = (
                     dispatch if dispatch is not None else previous_result['dispatch'])
+            if operation is not None or 'update_operation' in previous_result:
+                deployment['results'][device_id]['update_operation'] = (
+                    operation if operation is not None else previous_result['update_operation'])
             milestones = list(previous_result.get('update_milestones', ()))
             allowed = ('queued', 'inspect', 'core_write', 'core_verify',
                        'application_download', 'application_verify', 'pair',
@@ -844,6 +883,10 @@ class FleetRepository:
                       for target in deployment['targets']]
             if any(value not in terminal for value in states):
                 overall = 'active'
+            elif all(value == 'unresolved' for value in states):
+                overall = 'unresolved'
+            elif any(value == 'unresolved' for value in states):
+                overall = 'partial'
             elif all(value == 'cancelled' for value in states):
                 overall = 'cancelled'
             elif any(value == 'cancelled' for value in states):
@@ -867,6 +910,48 @@ class FleetRepository:
                 'deployment.target', status, identifier, device_id,
                 {'detail': str(detail)[:256], 'previous': previous}
             )
+        rollout_id = self.metadata('operation-rollout:' + str(identifier))
+        if rollout_id and status in ('complete', 'failed', 'cancelled', 'unresolved'):
+            self.record_rollout_result(rollout_id, device_id, status, detail)
+        return self.get_deployment(identifier)
+
+    def stop_tracking_deployment(self, identifier):
+        """Atomically retire local tracking/queued work, not the device operation."""
+        now = self.now()
+        with self.lock:
+            self.connection.execute('BEGIN IMMEDIATE')
+            try:
+                deployment = self.get_deployment(identifier)
+                if not deployment:
+                    raise ValueError('deployment does not exist')
+                if deployment['status'] not in ('queued', 'active'):
+                    self.connection.execute('COMMIT')
+                    return deployment  # Idempotent, without rewriting known outcomes.
+                unresolved = []
+                for target in deployment['targets']:
+                    result = deployment['results'][target]
+                    if result['status'] in ('complete', 'failed', 'cancelled') or (
+                            result['status'] == 'staged' and deployment['activation'] == 'stage'):
+                        continue
+                    previous = result['status']
+                    result.update(tracking_previous_status=previous,
+                        tracking_previous_detail=result.get('detail', ''),
+                        status='unresolved', detail='Tracking stopped locally; device outcome unconfirmed. Previous state: ' + previous,
+                        updated_at=now, revision=int(result.get('revision', 0)) + 1)
+                    unresolved.append(target)
+                self.connection.execute('UPDATE deployments SET status=\'unresolved\',results=?,updated_at=? WHERE id=?',
+                    (_json(deployment['results']), now, str(identifier)))
+                self.connection.execute("UPDATE jobs SET status='unresolved',updated_at=?,last_error=? WHERE kind='deployment' AND target=? AND status IN ('queued','running')",
+                    (now, 'Management tracking stopped; no device command sent', str(identifier)))
+                self.connection.execute('''INSERT INTO audit_events(action,status,subject,target,detail,created_at)
+                    VALUES('deployment.tracking_stopped','unresolved',?,?,?,?)''',
+                    (str(identifier), ', '.join(unresolved)[:256],
+                     _json({'detail': 'Management-only tracking stopped; device outcome remains unconfirmed',
+                            'unresolved_targets': unresolved, 'device_command_sent': False}), now))
+                self.connection.execute('COMMIT')
+            except Exception:
+                self.connection.execute('ROLLBACK')
+                raise
         return self.get_deployment(identifier)
 
     def save_profile(self, profile):
@@ -1036,7 +1121,7 @@ class FleetRepository:
             expected = rollout['cohorts'][rollout['cohort_index']]
             if device.get('cohort') != expected:
                 raise ValueError('device is not in the active rollout cohort')
-            normalized = 'complete' if str(result) == 'complete' else 'failed'
+            normalized = str(result) if str(result) in ('complete', 'failed', 'cancelled', 'unresolved') else 'failed'
             previous = rollout['results'].get(str(device_id))
             if previous:
                 counter = 'successes' if previous['result'] == 'complete' else 'failures'
@@ -1066,7 +1151,7 @@ class FleetRepository:
             incomplete = [value for value in targets if value not in rollout['results']]
             failed = [
                 value for value in targets
-                if rollout['results'].get(value, {}).get('result') == 'failed'
+                if value in rollout['results'] and rollout['results'][value]['result'] != 'complete'
             ]
             if incomplete:
                 raise ValueError('active cohort still has incomplete devices')
@@ -1232,7 +1317,7 @@ class FleetRepository:
         with self.lock, self.connection:
             self.connection.execute('''
                 UPDATE jobs SET status='complete',updated_at=?,last_error=''
-                WHERE id=?
+                WHERE id=? AND status != 'unresolved'
             ''', (self.now(), int(identifier)))
 
     def fail_job(self, identifier, detail, maximum_attempts=5,
@@ -1245,6 +1330,8 @@ class FleetRepository:
                 return
             attempts = int(row['attempts'])
             job = self.get_job(identifier)
+            if job['status'] == 'unresolved':
+                return
             # Deployment writes are not safe to retry invisibly: a timed-out
             # request may already have reached the device. Make failure final.
             status = 'failed' if job['kind'] == 'deployment' or attempts >= int(maximum_attempts) else 'queued'

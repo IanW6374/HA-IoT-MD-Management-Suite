@@ -2,7 +2,7 @@ function logView(){return new URLSearchParams(location.search).get('view')==='au
 function logStatusDot(status,description=''){
   const value=String(status||'observed'),normalized=value.toLowerCase();
   const tone=['failed','partial','error','interrupted','rolled_back','unavailable','rejected','denied','startup_failed'].includes(normalized)?'bad':
-    ['queued','active','running','checking','staging','scheduled','installing','staged','cancelled','cancelling','partly cancelled'].includes(normalized)?'warn':
+    ['queued','active','running','checking','staging','scheduled','installing','staged','cancelled','cancelling','partly cancelled','unresolved'].includes(normalized)?'warn':
     ['complete','completed','success','healthy','confirmed','recovery prepared','image verified'].includes(normalized)?'good':'neutral';
   const label=description?`${value.replaceAll('_',' ')} — ${description}`:value.replaceAll('_',' ');
   return `<span class="event-dot log-dot ${tone}" role="img" tabindex="0" aria-label="${esc(label)}" data-tooltip="${esc(label)}" title="${esc(label)}"></span>`;
@@ -12,7 +12,7 @@ function deploymentOutcomeDot(deployment){
   for(const id of deployment.targets){const status=deployment.results[id]?.status||'queued';counts.set(status,(counts.get(status)||0)+1);}
   const description=[...counts].map(([status,count])=>`${count} ${status}`).join(', ');
   const cancelled=counts.has('cancelled'), failed=counts.has('failed');
-  return logStatusDot(cancelled&&!failed?(counts.size===1?'cancelled':'partly cancelled'):deployment.status,description);
+  return logStatusDot(cancelled&&!failed&&!counts.has('unresolved')?(counts.size===1?'cancelled':'partly cancelled'):deployment.status,description);
 }
 function timeline(items){return items.map(item=>`<article class="event"><time class="event-time">${esc(when(item.time))}</time>${logStatusDot(item.status)}<div><strong>${esc(item.title)}</strong><p>${esc([item.subject,item.target,item.detail].filter(Boolean).join(' · '))}</p></div></article>`).join('')||'<p class="muted">No matching log entries.</p>'}
 function renderActionHistory(){
@@ -21,7 +21,7 @@ function renderActionHistory(){
   const requested=new URLSearchParams(location.search).get('history'),filter=['deployments','backups','seed'].includes(requested)?requested:control.value,query=document.getElementById('action-history-search').value;
   control.value=filter;
   const records=[],matches=values=>matchesCatalogSearch(values,query);
-  if(['all','deployments'].includes(filter))for(const item of state.deployments.filter(value=>['complete','failed','partial','staged','cancelled'].includes(value.status))){
+  if(['all','deployments'].includes(filter))for(const item of state.deployments.filter(value=>['complete','failed','partial','staged','cancelled','unresolved'].includes(value.status))){
     const devices=item.targets.map(id=>{const device=state.devices.find(value=>value.id===id);return [id,device?.host,device?.name,device?.description,item.results?.[id]?.status,item.results?.[id]?.detail].join(' ')});
     if(matches([item.id,item.update?.version,item.update?.release_type,item.profile_name,item.status,item.activation,...devices]))records.push({time:Number(item.created_at)||0,html:deploymentHistoryItem(item)});
   }

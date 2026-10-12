@@ -23,7 +23,8 @@ def compose(html):
     html = html.replace("if(activePage==='actions')refreshDeploymentProgress()",
                         "if(activePage==='actions')refreshVisibleDeploymentStatus()")
     html = html.replace("['complete','failed','partial','staged']", "['complete','failed','partial','staged','cancelled']")
-    html = html.replace("warn=['queued'", "warn=['cancelling','cancelled','queued'")
+    html = html.replace("['complete','failed','partial','staged','cancelled']", "['complete','failed','partial','staged','cancelled','unresolved']")
+    html = html.replace("warn=['queued'", "warn=['unresolved','cancelling','cancelled','queued'")
     html = html.replace('const activePage=', (assets / 'update_cancel.js').read_text() + '\nconst activePage=', 1)
     # One shared batch/table presentation for every action; keep history immutable.
     html = '\n'.join(line for line in html.split('\n')
@@ -43,9 +44,11 @@ def compose(html):
                         'await readBackupJobs(identifiers)')
     html = html.replace('const activePage=', (assets / 'action_progress.js').read_text() + '\nconst activePage=', 1)
     html = html.replace('${updateCancelAllBadge(deployment)}${statusBadge(deployment.status)}',
-                        '${progressTraceLink(deployment)}${updateCancelAllBadge(deployment)}${statusBadge(deployment.status)}')
+                        '${progressTraceLink(deployment)}${stopTrackingBadge(deployment)}${updateCancelAllBadge(deployment)}${statusBadge(deployment.status)}')
     html = html.replace('<div class="deployment-targets">${targetRows}</div></details>',
                         '<div class="deployment-targets">${targetRows}</div>${progressTraceLink(deployment)}</details>')
+    html = html.replace('detail=conciseDeploymentDetail(result.detail,update.version)',
+                        "detail=conciseDeploymentDetail([result.detail,result.tracking_previous_detail?'Previous detail: '+result.tracking_previous_detail:''].filter(Boolean).join(' · '),update.version)")
     html = html.replace('</style>', (assets / 'action_progress.css').read_text() + '</style>', 1)
     # Groups and select-all are inside the device picker, not separate modes.
     html = re.sub(
@@ -118,6 +121,10 @@ def compose(html):
     html = html.replace("status=!device.enabled?'disabled':device.last_error?'unavailable':'healthy'", "status=apiConnectionStatus(device).status")
     html = html.replace('<option value="stale">Stale</option>', '<option value="stale">Stale</option><option value="degraded">Degraded</option>')
     html = html.replace('<td data-label="Last seen">${esc(when(device.last_seen))}</td>', '<td data-label="Last seen">${esc(when(device.poll_state?.api?.last_success||device.last_seen))}</td>')
+    html = html.replace('<td data-label="Application">${esc(inventory.application_version||\'Unknown\')}</td>',
+                        '<td data-label="Application">${installedVersionLabel(device,\'application\')}</td>')
+    html = html.replace('<td data-label="Core">${esc(inventory.firmware_version||\'Unknown\')}</td>',
+                        '<td data-label="Core">${installedVersionLabel(device,\'firmware\')}</td>')
     html = html.replace('class="badge bad device-connection-error"', 'class="badge ${apiConnectionStatus(device).tone===\'bad\'?\'bad\':\'warn\'} device-connection-error"')
     promotion = '<dt>Automatic Stable promotion</dt><dd>__AUTO_PROMOTE_STABLE__</dd><dt>Automatic Beta promotion</dt><dd>__AUTO_PROMOTE_BETA__</dd><dt>Automatic Alpha promotion</dt><dd>__AUTO_PROMOTE_ALPHA__</dd>'
     html = html.replace(promotion, '')

@@ -45,6 +45,12 @@ function deviceHealthStatus(device,now=Date.now()/1000){
 function deviceConnectionBadges(device){
   return healthLED(apiConnectionStatus(device));
 }
+function installedVersionLabel(device,component){
+  const field=component==='firmware'?'firmware_version':'application_version',version=device.inventory?.device?.[field],evidence=device.poll_state?.versions||{};
+  const title=version?`Installed version last observed: ${when(evidence.received_at||device.last_seen)}`:
+    `Awaiting installed version report${evidence.error?'; '+evidence.error:''}`;
+  return `<span title="${esc(title)}">${esc(version||'Unknown')}</span>`;
+}
 function deviceRefreshButton(device){
   if(device.enabled===false)return '';
   const retry=deviceRetries.get(device.id),pending=Boolean(retry?.pending),title=retry?.error||'Refresh connection and device health';

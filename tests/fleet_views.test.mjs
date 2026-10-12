@@ -18,6 +18,14 @@ test('API and actual device health are independent',()=>{
   assert.equal(evaluate('apiConnectionStatus(device,now).tone',{device}),'good');
   assert.equal(evaluate('deviceHealthStatus(device,now).tone',{device}),'bad');
 });
+test('installed version labels use their own evidence, not stale health or job outcome',()=>{
+  const device={...structuredClone(healthy),last_seen:500,poll_state:{versions:{received_at:995}},inventory:{device:{application_version:'alpha121',firmware_version:'alpha121'}}};
+  assert.match(evaluate("installedVersionLabel(device,'application')",{device}),/last observed: 995.*alpha121/);
+  assert.match(evaluate("installedVersionLabel(device,'firmware')",{device}),/last observed: 995.*alpha121/);
+  device.inventory.device.application_version='';device.poll_state.versions.error='Version read timed out';
+  assert.match(evaluate("installedVersionLabel(device,'application')",{device}),/Awaiting installed version report; Version read timed out.*Unknown/);
+  assert.equal(evaluate('deviceHealthStatus(device,now).tone',{device}),'unknown');
+});
 test('recent API evidence plus a later read timeout is degraded, not an API-down claim',()=>{
   const device={...structuredClone(healthy),last_seen:0,last_error:'The read operation timed out',poll_state:{api:{last_success:990,error:'The read operation timed out',path:'/api/v3/health'},refresh:{stage:'health'}}};
   assert.equal(evaluate('apiConnectionStatus(device,now).tone',{device}),'warn');
