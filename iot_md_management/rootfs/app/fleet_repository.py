@@ -10,7 +10,7 @@ from pathlib import Path
 from fleet_identity import hostname_identity, migrate_hostname_identities
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def _json(value):
@@ -74,6 +74,7 @@ class FleetRepository:
                     fleet TEXT NOT NULL DEFAULT '{}',
                     last_error TEXT NOT NULL DEFAULT '',
                     last_seen INTEGER NOT NULL DEFAULT 0,
+                    poll_state TEXT NOT NULL DEFAULT '{}',
                     event_cursor INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS device_groups (
@@ -173,6 +174,8 @@ class FleetRepository:
             }
             if 'description' not in device_columns:
                 self.connection.execute("ALTER TABLE devices ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+            if 'poll_state' not in device_columns:
+                self.connection.execute("ALTER TABLE devices ADD COLUMN poll_state TEXT NOT NULL DEFAULT '{}'")
             rollout_columns = {
                 row['name'] for row in self.connection.execute(
                     'PRAGMA table_info(rollouts)'
@@ -211,7 +214,7 @@ class FleetRepository:
             stored_version = int(self.connection.execute(
                 'SELECT value FROM metadata WHERE key=?', ('schema_version',)
             ).fetchone()['value'])
-            if stored_version in (1, 2, 3):
+            if stored_version in (1, 2, 3, 4):
                 self.connection.execute(
                     'UPDATE metadata SET value=? WHERE key=?',
                     (str(SCHEMA_VERSION), 'schema_version')
@@ -331,7 +334,7 @@ class FleetRepository:
             return None
         value = dict(row)
         value['enabled'] = bool(value['enabled'])
-        for field in ('inventory', 'health', 'fleet'):
+        for field in ('inventory', 'health', 'fleet', 'poll_state'):
             value[field] = _object(value[field], {})
         if public:
             device = value['inventory'].get('device') or {}
@@ -527,24 +530,29 @@ class FleetRepository:
             raise ValueError('device is not registered')
         return {'deleted': True, 'id': identifier}
 
-    def set_device_error(self, identifier, detail):
+    def record_poll_state(self, identifier, state):
+        with self.lock, self.connection:
+            self.connection.execute('UPDATE devices SET poll_state=? WHERE id=?',
+                                    (_json(state), str(identifier)))
+
+    def set_device_error(self, identifier, detail, poll_state=None):
         with self.lock, self.connection:
             self.connection.execute(
-                'UPDATE devices SET last_error=? WHERE id=?',
-                (str(detail)[:256], str(identifier))
+                'UPDATE devices SET last_error=?,poll_state=COALESCE(?,poll_state) WHERE id=?',
+                (str(detail)[:256], _json(poll_state) if poll_state is not None else None, str(identifier))
             )
 
-    def record_poll(self, identifier, inventory, health, events):
+    def record_poll(self, identifier, inventory, health, events, poll_state=None):
         cursor = int(events.get('cursor', 0) or 0)
         received_at = self.now()
         with self.lock, self.connection:
             self.connection.execute('''
                 UPDATE devices SET inventory=?,health=?,fleet=?,last_error='',
-                    last_seen=?,event_cursor=? WHERE id=?
+                    last_seen=?,event_cursor=?,poll_state=COALESCE(?,poll_state) WHERE id=?
             ''', (
                 _json(inventory), _json(health),
                 _json(inventory.get('fleet') or {}), received_at, cursor,
-                str(identifier),
+                _json(poll_state) if poll_state is not None else None, str(identifier),
             ))
             for event in events.get('events', ()):
                 self.connection.execute(

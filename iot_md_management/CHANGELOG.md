@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.2.8 - 2026-10-12
+
+- Fix the 3.2.7 full-poll timeout regression: give each HTTP read its own
+  configured timeout and response-body deadline, with a separate bounded
+  six-request workflow budget. Keep live progress's short budget unchanged.
+- Track durable valid API-read evidence separately from complete device-report
+  freshness. Show recent-response/read-failure combinations as amber degraded,
+  not immediately API unavailable; name the failing endpoint in the tooltip.
+- Recover API connectivity on successful live reads without declaring cached
+  health fresh. Identify incomplete data refreshes and stale complete reports;
+  use the latest valid API response for the device table's Last seen value.
+- Preserve device records and history through the additive diagnostic-column
+  upgrade. Batch diagnostics per workflow; retain SQLite FULL durability,
+  worker reservations, certificate verification and no-replay protections.
+- Add offline coverage for 10-second reads across a longer healthy poll,
+  discovery success followed by a timeout, recovery, stale health, persistence,
+  and slow success/error bodies with and without a workflow deadline.
+- Management-only correction; IoT-MD Alpha 116 devices need no firmware update.
+  No HA settings or connected devices are changed by publication.
+
 ## 3.2.7 - 2026-10-11
 
 - Replace competing fixed poll/action loops with bounded per-device admission.

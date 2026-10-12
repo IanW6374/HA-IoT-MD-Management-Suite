@@ -93,7 +93,7 @@ class DeviceMutationRejected(ValueError):
 
 class DeviceClient:
     def __init__(self, record, timeout=10, sequence_provider=None, request_recorder=None,
-                 request_slots=None, deadline=None):
+                 request_slots=None, deadline=None, read_observer=None):
         self.record = record
         self.timeout = int(timeout)
         self.api_metadata = None
@@ -104,6 +104,9 @@ class DeviceClient:
         self.deadline = deadline
         self.ssl_context = None
         self.read_only = False
+        self.read_observer = read_observer
+        self.read_path = ''
+        self.request_deadline = None
         with _DEVICE_REQUEST_LOCK:
             self.request_lock = _DEVICE_REQUEST_LOCKS.setdefault(
                 (str(record.get('host', '')).lower(), int(record.get('port', 8444))), threading.RLock())
@@ -123,11 +126,26 @@ class DeviceClient:
     def _remaining(self):
         remaining = self.timeout if self.deadline is None else min(
             self.timeout, self.deadline - time.monotonic())
+        if self.request_deadline is not None:
+            remaining = min(remaining, self.request_deadline - time.monotonic())
         if remaining <= 0:
             raise TimeoutError('Device request deadline exceeded')
         return remaining
 
     def request(self, path, method='GET', payload=None, content_type='application/json'):
+        self.read_path = path.split('?', 1)[0]
+        try:
+            return self._reserved_request(path, method, payload, content_type)
+        except Exception as exc:
+            if method == 'GET':
+                self._observe_read(self.read_path, device_connection_error(exc))
+            raise
+
+    def _observe_read(self, path, error=''):
+        if self.read_observer:
+            self.read_observer(path.split('?', 1)[0], error)
+
+    def _reserved_request(self, path, method, payload, content_type):
         if self.read_only and method != 'GET':
             raise DeviceMutationRejected('Live progress clients cannot mutate devices')
         # Include lock/semaphore wait in the read deadline. Never abandon a
@@ -150,10 +168,13 @@ class DeviceClient:
         if path != '/api/v3' and not path.startswith('/api/v3/'):
             raise ValueError('Management requires Device API v3')
         if self.api_metadata is None and path != '/api/v3':
+            self.read_path = '/api/v3'
             metadata = self._request('/api/v3')
             if not isinstance(metadata, dict) or metadata.get('api_version') != 3:
                 raise ValueError('Device API v3 required; update IoT-MD and Management together')
             self.api_metadata = metadata
+            self._observe_read('/api/v3')
+        self.read_path = path.split('?', 1)[0]
         headers = {}
         if method == 'POST':
             metadata = self.api_metadata or {}
@@ -176,6 +197,8 @@ class DeviceClient:
             raise
         if not isinstance(result, dict) or result.get('api_version') != 3:
             raise ValueError('Invalid Device API v3 response')
+        if method == 'GET':
+            self._observe_read(path)
         if method == 'POST' and self.request_recorder:
             operation = result.get('operation', {})
             self.request_recorder(self.last_request_key, method, path,
@@ -183,6 +206,17 @@ class DeviceClient:
         return result
 
     def _request(self, path, method='GET', payload=None, content_type='application/json', headers=None):
+        # Each actual HTTP read has its own wall-clock budget, while the caller
+        # may impose a separate workflow deadline (e.g. the live-read budget).
+        previous = self.request_deadline
+        if method == 'GET':
+            self.request_deadline = time.monotonic() + self.timeout
+        try:
+            return self._transport_request(path, method, payload, content_type, headers)
+        finally:
+            self.request_deadline = previous
+
+    def _transport_request(self, path, method='GET', payload=None, content_type='application/json', headers=None):
         body = None if payload is None else (
             bytes(payload) if isinstance(payload, (bytes, bytearray))
             else json.dumps(payload).encode()
@@ -215,7 +249,7 @@ class DeviceClient:
             raise error(bounded_text(detail, 256)) from None
 
     def _response_json(self, response):
-        if self.deadline is None:
+        if self.deadline is None and self.request_deadline is None:
             return json.loads(response.read())
         chunks, size = [], 0
         while True:
@@ -252,9 +286,10 @@ class FleetController:
         self._request_slots = threading.BoundedSemaphore(workers // 2)
         self._progress_slots = threading.BoundedSemaphore(workers - workers // 2)
         self.progress_timeout = max(2, min(15, int(progress_timeout)))
-        self._progress_lock = threading.Lock()
+        self._progress_lock = threading.RLock()
         self._progress_reads = {}
         self._progress_clients = {}
+        self._api_reads = {}
 
     def _action_lock(self, identifier):
         with self._action_locks_guard:
@@ -263,11 +298,47 @@ class FleetController:
     def _client(self, record, timeout=None):
         settings = dict(record)
         settings.update(self.tls)
+        identifier = record.get('id')
+        if identifier:
+            with self._progress_lock:
+                self._api_reads.setdefault(identifier, json.loads(json.dumps(record.get('poll_state') or {})))
         return DeviceClient(settings, self.timeout if timeout is None else timeout,
             sequence_provider=lambda minimum: self.store.next_api_sequence(minimum),
             request_recorder=lambda key, method, path, state, operation: self.store.record_api_request(
                 record['id'], key, method, path, state, operation),
-            request_slots=self._request_slots)
+            request_slots=self._request_slots,
+            read_observer=(lambda path, error: self._observe_api_read(identifier, path, error)) if identifier else None)
+
+    def _observe_api_read(self, identifier, path, error=''):
+        with self._progress_lock:
+            state = self._api_reads.setdefault(identifier, {})
+            api = state.setdefault('api', {})
+            api.update(path=path.split('?', 1)[0], error=bounded_text(error), checked_at=self.now())
+            api['last_failure' if error else 'last_success'] = self.now()
+
+    def _poll_state(self, identifier):
+        with self._progress_lock:
+            return json.loads(json.dumps(self._api_reads.get(identifier, {})))
+
+    def _refresh_state(self, identifier, stage, error=''):
+        with self._progress_lock:
+            state = self._api_reads.setdefault(identifier, {})
+            state['refresh'] = {
+                'stage': stage, 'error': bounded_text(error), 'at': self.now()}
+            return json.loads(json.dumps(state))
+
+    def _read_device(self, identifier, client, path):
+        # Real clients observe discovery too; test/alternative clients still
+        # report the known read result without generating additional requests.
+        if isinstance(client, DeviceClient):
+            return client.request(path)
+        try:
+            result = client.request(path)
+        except Exception as exc:
+            self._observe_api_read(identifier, path, device_connection_error(exc))
+            raise
+        self._observe_api_read(identifier, path)
+        return result
 
     def create_backup(self, identifier, source='manual', retention=7):
         record = self.store.get_device(identifier, public=False)
@@ -431,9 +502,13 @@ class FleetController:
             return self.store.get_device(identifier)
         cursor = int(record.get('event_cursor', 0))
         client = self._client(record)
-        client.deadline = time.monotonic() + max(5, self.timeout)
+        # Discovery + inventory + configuration + optional trial confirmation
+        # + health + events: bounded workflow, not one request's timeout shared
+        # by the entire cycle. Live progress retains its independent short cap.
+        client.deadline = time.monotonic() + 6 * self.timeout
+        stage = 'inventory'
         try:
-            inventory = client.request('/api/v3/device/inventory')
+            inventory = self._read_device(identifier, client, '/api/v3/device/inventory')
             self._progress_observed(identifier, started, received=True)
             # Publish observed transfer/staging boundaries before slower health,
             # configuration or log reads. This is not installation confirmation
@@ -442,26 +517,30 @@ class FleetController:
                 **record, 'inventory': inventory,
                 'fleet': inventory.get('fleet') or {},
             }, progress_only=True)
-            configuration = client.request('/api/v3/configuration')
+            stage = 'configuration'
+            configuration = self._read_device(identifier, client, '/api/v3/configuration')
             if (configuration.get('configuration') or {}).get(
                 'network_trial_confirmation_ready'
             ):
+                stage = 'network confirmation'
                 confirmation = client.request(
                     '/api/v3/configuration/network/confirm', 'POST', {}
                 )
                 if confirmation.get('confirmed'):
                     configuration['configuration']['network_trial_pending'] = False
             inventory['configuration'] = configuration.get('configuration') or {}
-            health = client.request('/api/v3/health')
-            events = client.request(
-                '/api/v3/events?cursor=' + str(cursor) + '&limit=64'
-            )
+            stage = 'health'
+            health = self._read_device(identifier, client, '/api/v3/health')
+            stage = 'events'
+            events = self._read_device(identifier, client, '/api/v3/events?cursor=' + str(cursor) + '&limit=64')
         except Exception as exc:
             self._progress_observed(identifier, started, error=device_connection_error(exc))
-            self.store.set_device_error(identifier, device_connection_error(exc))
+            state = self._refresh_state(identifier, stage, device_connection_error(exc))
+            self.store.set_device_error(identifier, device_connection_error(exc), poll_state=state)
             self._mark_immediate_install_restart(identifier)
             return self.store.get_device(identifier)
-        self.store.record_poll(identifier, inventory, health, events)
+        state = self._refresh_state(identifier, 'complete')
+        self.store.record_poll(identifier, inventory, health, events, poll_state=state)
         record = self.store.get_device(identifier)
         self._reconcile_deployments(identifier, record, client=client)
         return record
@@ -471,6 +550,7 @@ class FleetController:
         with self._progress_lock:
             self._progress_reads = {key: value for key, value in self._progress_reads.items() if key in enabled}
             self._progress_clients = {key: value for key, value in self._progress_clients.items() if key in enabled}
+            self._api_reads = {key: value for key, value in self._api_reads.items() if key in enabled}
             return {key: dict(value) for key, value in self._progress_reads.items()}
 
     def _progress_client(self, record):
@@ -514,7 +594,7 @@ class FleetController:
         try:
             client = self._progress_client(record)
             client.deadline = started + self.progress_timeout
-            inventory = client.request('/api/v3/device/inventory')
+            inventory = self._read_device(identifier, client, '/api/v3/device/inventory')
             observed = {**record, 'inventory': inventory, 'fleet': inventory.get('fleet') or {}}
             received = True
             self._progress_observed(identifier, started, received=True)
@@ -530,7 +610,7 @@ class FleetController:
                 if update and self._deployment_update_completed(deployment, identifier, observed) and not self._installation_started(observed, update, {}):
                     candidates.append(deployment)
             if candidates:
-                health = client.request('/api/v3/health')
+                health = self._read_device(identifier, client, '/api/v3/health')
                 if not isinstance(health.get('health'), dict):
                     raise ValueError('Invalid device health confirmation response')
                 for deployment in candidates:
@@ -542,7 +622,7 @@ class FleetController:
             cancelling = [item for item in self.store.active_deployments()
                 if item['results'].get(identifier, {}).get('status') == 'cancelling']
             if cancelling:
-                acknowledgement = client.request('/api/v3/fleet/update-cancel')
+                acknowledgement = self._read_device(identifier, client, '/api/v3/fleet/update-cancel')
                 for deployment in cancelling:
                     update = deployment.get('update') or {}
                     if (acknowledgement.get('status') == 'cancelled' and
@@ -557,6 +637,9 @@ class FleetController:
             self._progress_observed(identifier, started, error=device_connection_error(exc), received=received)
             self._mark_immediate_install_restart(identifier)
             raise
+        finally:
+            # One durable diagnostic write per live workflow, not per HTTP read.
+            self.store.record_poll_state(identifier, self._poll_state(identifier))
 
     @staticmethod
     def _update_installed(record, update):

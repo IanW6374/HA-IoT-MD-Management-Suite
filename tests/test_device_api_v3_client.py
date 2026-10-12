@@ -181,14 +181,16 @@ class DeviceAPIv3ClientTests(unittest.TestCase):
             suffix = '/error' if request.full_url.endswith('/error') else '/success'
             return real_open(f'http://127.0.0.1:{server.server_port}{suffix}', timeout=kwargs['timeout'])
         try:
-            for suffix in ('success', 'error'):
-                with self.subTest(response=suffix):
+            for suffix, workflow_deadline in ((name, bounded) for name in ('success', 'error') for bounded in (True, False)):
+                with self.subTest(response=suffix, workflow_deadline=workflow_deadline):
                     started = time.monotonic()
-                    self.client.deadline = started + .2
+                    self.client.deadline = started + .2 if workflow_deadline else None
+                    self.client.timeout = .2
                     with mock.patch.object(SERVICE.urllib.request, 'urlopen', side_effect=local_transport):
                         with self.assertRaises(TimeoutError):
                             self.client._request('/api/v3/' + suffix)
                     self.assertLess(time.monotonic() - started, .7)
+                    self.assertIsNone(self.client.request_deadline)
         finally:
             server.shutdown()
             server.server_close()

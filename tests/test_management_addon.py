@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 3.2.7', addon)
+        self.assertIn('version: 3.2.8', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('device_worker_limit: 8', addon)
         self.assertIn('device_worker_limit: int(2,32)', addon)
@@ -1445,7 +1445,7 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
             ).fetchall()
         }
         self.assertIn('profile_type', columns)
-        self.assertEqual(upgraded.metadata('schema_version'), '4')
+        self.assertEqual(upgraded.metadata('schema_version'), '5')
 
     def test_device_cohort_edit_and_configuration_profiles_persist(self):
         path = Path(self.temp.name) / 'editable.db'

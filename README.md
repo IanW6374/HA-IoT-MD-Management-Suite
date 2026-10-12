@@ -86,6 +86,24 @@ Offline tests cover 50/100-device fleets, stalled background tasks, unreachable
 devices, read deadlines and no overlapping scheduled tasks. Real-device
 qualification remains necessary; mock timings are not network benchmarks.
 
+**Device request timeout** applies separately to each actual HTTP read, including
+the response body. A full inventory/configuration/health/events poll has an
+additional workflow cap of six times that value, allowing discovery and optional
+network-trial confirmation. A 10-second setting therefore does not give all five
+ordinary reads just 10 seconds combined. The independent live-progress budget
+is unchanged. No uncertain device mutation is automatically replayed.
+
+API connectivity and complete device-report freshness are tracked separately.
+The API LED is amber when a recent valid response is followed by a failed read;
+its tooltip names the failing endpoint. It is red when there is no recent valid
+response and the latest attempt failed. Successful live inventory can recover
+the API LED, but cannot refresh cached device health. Device-health tooltips
+identify incomplete data refreshes and stale complete reports. **Last seen**
+shows the most recent valid API response, not only the last complete poll.
+Read evidence survives add-on restarts; existing device data and history are
+preserved when the new diagnostic column is added. Diagnostic updates are batched
+at the end of each logical read workflow, rather than written per HTTP request.
+
 ## Profiles and complete backups
 
 Profiles are reusable configuration patches or baselines. The profile builder

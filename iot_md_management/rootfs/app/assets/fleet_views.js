@@ -5,6 +5,14 @@ const healthStaleAfter=__HEALTH_STALE_AFTER__;
 
 function apiConnectionStatus(device,now=Date.now()/1000){
   if(device.enabled===false)return {status:'disabled',tone:'unknown',label:'API: management disabled'};
+  const api=device.poll_state?.api;
+  if(api){
+    const received=Number(api.last_success)||0,fresh=received&&now-received<=healthStaleAfter;
+    if(api.error)return fresh?{status:'degraded',tone:'warn',label:`API responded at ${when(received)}; latest read failed (${api.path||'request'}): ${api.error}`}:{status:'unavailable',tone:'bad',label:`API unavailable: ${api.error}${received?'; last response '+when(received):''}`};
+    if(!received)return {status:'unknown',tone:'unknown',label:'API: not yet connected'};
+    if(!fresh)return {status:'stale',tone:'warn',label:'API: connection status is stale; last response '+when(received)};
+    return {status:'healthy',tone:'good',label:'API connected; last response '+when(received)};
+  }
   if(device.last_error)return {status:'unavailable',tone:'bad',label:'API unavailable: '+device.last_error};
   if(!device.last_seen)return {status:'unknown',tone:'unknown',label:'API: not yet connected'};
   if(now-Number(device.last_seen)>healthStaleAfter)return {status:'stale',tone:'warn',label:'API: connection status is stale; last checked '+when(device.last_seen)};
@@ -13,7 +21,11 @@ function apiConnectionStatus(device,now=Date.now()/1000){
 function healthLED(status){return `<span class="device-health-led ${esc(status.tone)}" role="img" aria-label="${esc(status.label)}" title="${esc(status.label)}" tabindex="0"></span>`}
 function deviceHealthStatus(device,now=Date.now()/1000){
   const apiStatus=apiConnectionStatus(device,now);
-  if(apiStatus.tone!=='good')return {tone:'unknown',label:device.last_seen?'Device health unknown: last report is stale ('+when(device.last_seen)+'); refresh when API is available':'Device health unknown: no report received'};
+  if(apiStatus.tone!=='good')return {tone:'unknown',label:device.poll_state?.api?`Device health unknown: latest API read is unconfirmed; last complete report ${device.last_seen?when(device.last_seen):'never'}`:device.last_seen?'Device health unknown: last report is stale ('+when(device.last_seen)+'); refresh when API is available':'Device health unknown: no report received'};
+  if(device.poll_state?.api){
+    if(device.last_error)return {tone:'warn',label:`Device data refresh incomplete (${device.poll_state.refresh?.stage||'data'}): ${device.last_error}; last complete report ${device.last_seen?when(device.last_seen):'never'}`};
+    if(!device.last_seen||now-Number(device.last_seen)>healthStaleAfter)return {tone:'unknown',label:device.last_seen?'Device health unknown: last complete report is stale ('+when(device.last_seen)+')':'Device health unknown: awaiting a complete report'};
+  }
   const inventory=device.inventory?.device||{},runtime=inventory.runtime||{},lifecycle=runtime.lifecycle||{},boot=inventory.boot||{},observation=inventory.qualification_observation||{},tasks=runtime.tasks||{},services=runtime.state||{},issues=[],warnings=[];
   const deviceState=lifecycle.device_state||services.device_state||boot.device_state;
   const state=observation.health_state;

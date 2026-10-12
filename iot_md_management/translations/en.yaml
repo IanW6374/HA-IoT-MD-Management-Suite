@@ -10,7 +10,7 @@ configuration:
     description: Seconds between fleet inventory and health polls.
   request_timeout_s:
     name: Device request timeout
-    description: Maximum seconds allowed for a Device API request.
+    description: Maximum seconds for each Device API HTTP read, including its response body. Full polls have a separate six-request workflow budget; live progress uses its own shorter budget.
   device_worker_limit:
     name: Maximum concurrent device handlers
     description: Bounds scheduled device work and API requests. Half the handlers are reserved for live progress; slow background work cannot consume them.

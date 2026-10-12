@@ -18,6 +18,36 @@ test('API and actual device health are independent',()=>{
   assert.equal(evaluate('apiConnectionStatus(device,now).tone',{device}),'good');
   assert.equal(evaluate('deviceHealthStatus(device,now).tone',{device}),'bad');
 });
+test('recent API evidence plus a later read timeout is degraded, not an API-down claim',()=>{
+  const device={...structuredClone(healthy),last_seen:0,last_error:'The read operation timed out',poll_state:{api:{last_success:990,error:'The read operation timed out',path:'/api/v3/health'},refresh:{stage:'health'}}};
+  assert.equal(evaluate('apiConnectionStatus(device,now).tone',{device}),'warn');
+  assert.equal(evaluate('apiConnectionStatus(device,now).status',{device}),'degraded');
+  assert.match(evaluate('apiConnectionStatus(device,now).label',{device}),/latest read failed.*health/);
+  assert.equal(evaluate('deviceHealthStatus(device,now).tone',{device}),'unknown');
+  device.last_seen=990;
+  assert.match(evaluate('deviceHealthStatus(device,now).label',{device}),/latest API read is unconfirmed; last complete report 990/);
+  device.poll_state.api.last_success=500;
+  assert.equal(evaluate('apiConnectionStatus(device,now).tone',{device}),'bad');
+  delete device.poll_state.api.last_success;
+  assert.equal(evaluate('apiConnectionStatus(device,now).tone',{device}),'bad');
+});
+test('successful live inventory recovers API status but not failed or stale device reports',()=>{
+  const device={...structuredClone(healthy),last_seen:0,last_error:'Configuration stalled',poll_state:{api:{last_success:990,error:''},refresh:{stage:'configuration'}}};
+  assert.equal(evaluate('apiConnectionStatus(device,now).tone',{device}),'good');
+  assert.equal(evaluate('deviceHealthStatus(device,now).tone',{device}),'warn');
+  assert.match(evaluate('deviceHealthStatus(device,now).label',{device}),/refresh incomplete.*configuration/);
+  device.last_error='';device.last_seen=500;
+  assert.equal(evaluate('deviceHealthStatus(device,now).tone',{device}),'unknown');
+  device.last_seen=990;
+  assert.equal(evaluate('deviceHealthStatus(device,now).tone',{device}),'good');
+});
+test('API timestamps age independently of full-report timestamps and survive fresh full data',()=>{
+  const device={...structuredClone(healthy),poll_state:{api:{last_success:500,error:''}}};
+  assert.equal(evaluate('apiConnectionStatus(device,now).status',{device}),'stale');
+  assert.equal(evaluate('deviceHealthStatus(device,now).tone',{device}),'unknown');
+  device.enabled=false;
+  assert.equal(evaluate('apiConnectionStatus(device,now).status',{device}),'disabled');
+});
 test('baseline secrets are opt-in and include every supported password and certificate widget',()=>{
   const entries=[{dataset:{settingName:'mqtt_password',profileKind:'secret'}},{dataset:{settingName:'wifi_password',profileKind:'secret'}},{dataset:{settingName:'certificate_portal_key',profileKind:'file'}},{dataset:{settingName:'wifi_ssid',profileKind:'text'}}];
   assert.equal(evaluate('baselineProfileFields(entries).includes("mqtt_password")',{entries}),false);
