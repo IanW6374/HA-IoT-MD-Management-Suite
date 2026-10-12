@@ -32,8 +32,9 @@ def reduce_operation(value, dispatch, expected_device, update, previous=None):
     state, phase = value.get('state'), value.get('phase')
     completed, revision = value.get('completed'), value.get('revision')
     sample, boot = value.get('sample_sequence'), value.get('boot_id')
+    epoch = value.get('boot_epoch', 0)
     if (state not in STATES or phase not in PHASES or not _integer(revision, 1) or
-            not _integer(sample) or not isinstance(boot, str) or not 1 <= len(boot) <= 64 or
+            not _integer(sample) or not _integer(epoch) or not isinstance(boot, str) or not 1 <= len(boot) <= 64 or
             not isinstance(completed, list) or len(completed) > len(PHASES) or
             any(item not in PHASES for item in completed) or len(set(completed)) != len(completed)):
         raise ValueError('Malformed device update operation lifecycle')
@@ -41,6 +42,10 @@ def reduce_operation(value, dispatch, expected_device, update, previous=None):
         raise ValueError('Incomplete local health confirmation evidence')
     previous = previous or {}
     if previous:
+        if epoch < previous.get('boot_epoch', 0):
+            return None
+        if epoch == previous.get('boot_epoch', 0) and previous.get('boot_id') != boot:
+            raise ValueError('Conflicting device observation boot epoch')
         if revision < previous['revision']:
             return None
         if revision == previous['revision']:
@@ -63,6 +68,7 @@ def reduce_operation(value, dispatch, expected_device, update, previous=None):
     # Only validated, bounded lifecycle fields enter the durable job projection.
     evidence = {key: value[key] for key in ('id', 'state', 'phase', 'revision',
                                           'completed', 'boot_id', 'sample_sequence')}
+    evidence['boot_epoch'] = epoch
     return {'status': STATES[state], 'detail': detail or 'Device update ' + state,
             'progress': {'phase': phase, 'completed': list(completed), 'percent': percent},
             'operation': evidence}

@@ -51,7 +51,7 @@ class OperationReducerTests(unittest.TestCase):
     def test_reboot_snapshot_resets_only_sample_not_durable_revision(self):
         self.value.update(state='staging', phase='core_write', sample_sequence=100, percent=90)
         previous = self.reduce()['operation']
-        self.value.update(boot_id='boot-two', sample_sequence=0, percent=None)
+        self.value.update(boot_id='boot-two', boot_epoch=1, sample_sequence=0, percent=None)
         result = self.reduce(previous)
         self.assertEqual(result['status'], 'staging')
         self.assertIsNone(result['progress']['percent'])

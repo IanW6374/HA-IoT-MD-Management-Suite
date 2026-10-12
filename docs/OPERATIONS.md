@@ -207,3 +207,56 @@ Cohort rollouts use the normal queued update workflow and bounded handlers.
 Cancelled/unresolved cohort targets do not pass the advancement gate.
 This release is API-only. MQTT reporting is not enabled, pending an approved
 trusted broker destination and authenticated report transport.
+
+## Optional MQTT tracking (3.2.13 / Alpha 124)
+
+Management 3.2.13 and IoT-MD Alpha 124 implement optional MQTT tracking.
+Both updated components must be installed before
+selecting MQTT. API remains the default and starts no MQTT connection. Commands
+and cancellation always use the authenticated Device API, regardless of the
+selected progress transport.
+
+In HA app configuration, set `update_tracking_method` to `mqtt` to opt in. These
+recommended defaults are configurable:
+
+```yaml
+update_tracking_method: api
+mqtt_host: mqtt-broker.home.arpa
+mqtt_port: 8883
+mqtt_progress_topic: iotmd/update-operations/{device_id}/{operation_id}
+mqtt_report_stale_s: 15
+mqtt_snapshot_interval_s: 60
+```
+
+Set `mqtt_ca_path` for a private broker CA, or leave it empty for system roots.
+Optional `mqtt_username` / `mqtt_password` and paired `mqtt_client_cert_path` /
+`mqtt_client_key_path` support broker authentication. TLS certificate and hostname
+verification cannot be disabled. No connection has been made to the user's broker
+during implementation or offline verification.
+
+The topic template must contain each identity placeholder exactly once as a
+complete level, with no wildcards or empty levels. Management derives its
+subscription, e.g. `iotmd/update-operations/+/+`. Give Management's account only
+the necessary subscribe permissions and each device publish permissions for its
+own hardware-identity level. Devices must already be configured to use the same
+trusted TLS broker and port; Management does not copy broker credentials onto
+devices or silently overwrite their MQTT settings.
+
+Reports contain device/operation identity, release/stage/progress/outcome and an
+authentication tag. They never contain report keys, signed policies, credential
+material or raw private error strings. Each operation gets a random key delivered
+over mTLS, stored encrypted on Management and the device, and omitted from public
+API snapshots/diagnostics. MQTT delivery/QoS alone does not authenticate a report.
+
+Valid push observations use the same ordered lifecycle reducer as API snapshots.
+Old boot epochs, duplicate/stale cursors, wrong identities/releases/topics and
+invalid authentication tags cannot refresh freshness or complete a job. Receiver
+work is bounded/coalesced per operation; it never dispatches a device mutation.
+API snapshots still reconcile periodically, when reports become stale or the
+broker is unavailable, and during cancellation. Broker errors never replay a POST.
+
+Settings apply to newly dispatched actions. Changing broker/topic settings during
+an active action may make it reconcile via API until a new action uses the new
+settings. Select API again to disable the Management subscriber. Installed
+versions and API connectivity remain independent of MQTT progress freshness.
+Redacted receiver counts/state are available in `/api/scheduler`.

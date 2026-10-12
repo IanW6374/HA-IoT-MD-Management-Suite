@@ -20,19 +20,22 @@ class DeviceScheduler:
         self.lock = threading.RLock()
         self.inflight, self.progress, self.full_due = {}, {}, {}
         self.waiting_since = {}
+        self._active_results = {}
         self.last_device = ''
         self.action_admissions = 0
         self.stopped = threading.Event()
 
     def _active_devices(self):
         active = set()
+        self._active_results = {}
         for deployment in self.store.active_deployments():
             if not deployment.get('update'):
                 continue
             for identifier in deployment['targets']:
                 status = deployment['results'].get(identifier, {}).get('status', 'queued')
-                if status not in ('queued', 'running', 'complete', 'failed', 'cancelled'):
+                if status not in ('queued', 'running', 'complete', 'failed', 'cancelled', 'unresolved'):
                     active.add(identifier)
+                    self._active_results[identifier] = deployment['results'].get(identifier, {})
         return active
 
     def _submit(self, kind, identifiers, callback):
@@ -73,7 +76,9 @@ class DeviceScheduler:
             # Earliest-due first, with a rotating tie-break: large fleets cannot
             # keep serving their first few devices while starving the last ones.
             due = sorted((identifier for identifier in active - busy
-                          if self.progress.get(identifier, {}).get('due', 0) <= now),
+                          if self.progress.get(identifier, {}).get('due', 0) <= now and
+                          getattr(self.controller, 'progress_read_needed', lambda _identifier, _result: True)(
+                              identifier, self._active_results.get(identifier))),
                          key=lambda key: (self.progress.get(key, {}).get('due', 0),
                                           key <= self.last_device, key))
             progressing = sum(item[0] == 'progress' for item in self.inflight.values())

@@ -1,5 +1,5 @@
 name: IoT MD Management Suite
-version: 3.2.12
+version: 3.2.13
 slug: iot_md_management
 description: Fleet, policy, staged rollout and secure release management for IoT MD devices
 url: https://github.com/IanW6374/HA-IoT-MD-Management-Suite
@@ -35,6 +35,17 @@ options:
   device_worker_limit: 8
   progress_interval_s: 5
   progress_timeout_s: 5
+  update_tracking_method: api
+  mqtt_host: mqtt-broker.home.arpa
+  mqtt_port: 8883
+  mqtt_username: ''
+  mqtt_password: ''
+  mqtt_ca_path: ''
+  mqtt_client_cert_path: ''
+  mqtt_client_key_path: ''
+  mqtt_progress_topic: iotmd/update-operations/{device_id}/{operation_id}
+  mqtt_report_stale_s: 15
+  mqtt_snapshot_interval_s: 60
   device_api_ca_path: /ssl/iot-md-ca.pem
   device_api_client_cert_path: /ssl/iot-md-fleet.pem
   device_api_client_key_path: /ssl/iot-md-fleet-key.pem
@@ -54,6 +65,17 @@ schema:
   device_worker_limit: int(2,32)
   progress_interval_s: int(1,30)
   progress_timeout_s: int(2,15)
+  update_tracking_method: list(api|mqtt)
+  mqtt_host: str
+  mqtt_port: port
+  mqtt_username: str?
+  mqtt_password: password?
+  mqtt_ca_path: str?
+  mqtt_client_cert_path: str?
+  mqtt_client_key_path: str?
+  mqtt_progress_topic: str
+  mqtt_report_stale_s: int(10,120)
+  mqtt_snapshot_interval_s: int(15,300)
   device_api_ca_path: str
   device_api_client_cert_path: str
   device_api_client_key_path: str

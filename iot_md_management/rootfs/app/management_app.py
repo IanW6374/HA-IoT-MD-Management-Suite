@@ -21,6 +21,7 @@ from fleet_repository import FleetRepository
 from fleet_policy import PolicySigner
 from fleet_service import FleetController
 from device_scheduler import DeviceScheduler
+from mqtt_progress import MQTTProgressReceiver
 from configuration_profiles import normalize_profile
 from release_catalog import ArtifactVerifier, CatalogSigner, ReleaseCatalog
 from management_portal import HTML as MANAGEMENT_PORTAL_HTML
@@ -126,7 +127,7 @@ RELEASES = ReleaseCatalog(
 CONTROLLER = FleetController(
     STORE, SIGNER, timeout=int(OPTIONS.get('request_timeout_s', 10)),
     worker_limit=int(OPTIONS.get('device_worker_limit', 8)),
-    progress_timeout=int(OPTIONS.get('progress_timeout_s', 5)), tls={
+    progress_timeout=int(OPTIONS.get('progress_timeout_s', 5)), tracking_options=OPTIONS, tls={
         'ca_path': OPTIONS.get('device_api_ca_path', '/ssl/iot-md-ca.pem'),
         'cert_path': OPTIONS.get(
             'device_api_client_cert_path', '/ssl/iot-md-fleet.pem'
@@ -136,6 +137,9 @@ CONTROLLER = FleetController(
         ),
     }
 )
+
+MQTT_PROGRESS = MQTTProgressReceiver(STORE, CONTROLLER, OPTIONS)
+CONTROLLER.mqtt_connected = lambda: MQTT_PROGRESS.connected
 
 
 PORTAL_PAGES = {
@@ -408,7 +412,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {'deployments': deployments})
             elif path == '/api/scheduler':
                 self._json(200, {'scheduler': SCHEDULER.snapshot() if SCHEDULER else {},
-                    'progress_reads': CONTROLLER.progress_diagnostics()})
+                    'progress_reads': CONTROLLER.progress_diagnostics(), 'mqtt_progress': MQTT_PROGRESS.snapshot()})
             elif path == '/api/progress-traces':
                 query = parse_qs(urlparse(self.path).query)
                 data = CONTROLLER.progress_trace_export(
@@ -805,6 +809,7 @@ def main():
         progress_interval=OPTIONS.get('progress_interval_s', 5),
         poll_interval=OPTIONS.get('poll_interval_s', 60))
     threading.Thread(target=SCHEDULER.run, daemon=True).start()
+    MQTT_PROGRESS.start()
     threading.Thread(target=backup_schedule_loop, daemon=True).start()
     if RELEASE_SYNC_STATE['enabled']:
         threading.Thread(target=release_sync_loop, daemon=True).start()

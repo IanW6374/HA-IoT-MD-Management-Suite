@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 3.2.12', addon)
+        self.assertIn('version: 3.2.13', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('device_worker_limit: 8', addon)
         self.assertIn('device_worker_limit: int(2,32)', addon)

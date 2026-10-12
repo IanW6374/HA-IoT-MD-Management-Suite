@@ -14,6 +14,8 @@ import urllib.request
 
 from progress_traces import clean_traces, copy_trace, failure_reason, retain_attempt
 from update_operation_contract import reduce_operation
+from mqtt_progress import tracking_settings
+from operation_reporting import report_topic
 
 
 BACKUP_KDF_ITERATIONS = 120000
@@ -336,7 +338,7 @@ class DeviceClient:
 
 class FleetController:
     def __init__(self, store, signer, timeout=10, now=None, tls=None,
-                 worker_limit=8, progress_timeout=5):
+                 worker_limit=8, progress_timeout=5, tracking_options=None):
         self.store = store
         self.signer = signer
         self.timeout = int(timeout)
@@ -356,6 +358,28 @@ class FleetController:
         self._api_reads = {}
         self._progress_traces = {}
         self._operation_observation_lock = threading.RLock()
+        self.tracking = tracking_settings(tracking_options or {})
+        self.mqtt_connected = lambda: False
+
+    def progress_read_needed(self, identifier, result=None):
+        if self.tracking['method'] != 'mqtt' or not self.mqtt_connected():
+            return True
+        if result is None:
+            result = next((item['results'].get(identifier, {}) for item in self.store.active_deployments()
+                           if identifier in item['targets']), {})
+        dispatch = result.get('dispatch') or {}
+        if result.get('status') == 'cancelling' or dispatch.get('tracking_method') != 'mqtt':
+            return True
+        with self._progress_lock:
+            if identifier not in self._api_reads:
+                self._api_reads[identifier] = self.store.get_poll_state(identifier)
+            state = self._api_reads[identifier].get('mqtt_progress') or {}
+        if state.get('operation_id') != dispatch.get('update_operation_id'):
+            return True
+        age = self.now() - state.get('received_at', 0)
+        snapshot_age = self.now() - state.get('api_snapshot_at', 0)
+        return (age < 0 or age >= self.tracking['stale_s'] or snapshot_age < 0 or
+                snapshot_age >= self.tracking['snapshot_interval_s'])
 
     def _action_lock(self, identifier):
         with self._action_locks_guard:
@@ -751,6 +775,9 @@ class FleetController:
             received = True
             self._progress_observed(identifier, started, received=True)
             self._reconcile_deployments(identifier, observed, progress_only=True)
+            if tracked and tracked[0]['results'][identifier]['dispatch'].get('tracking_method') == 'mqtt':
+                with self._progress_lock:
+                    self._api_reads.setdefault(identifier, {}).setdefault('mqtt_progress', {})['api_snapshot_at'] = self.now()
             # A fresh health read may confirm a matching dispatched update,
             # but inventory alone, cached health, or an active trial may not.
             candidates = []
@@ -1232,6 +1259,22 @@ class FleetController:
                 projection['detail'], progress=projection['progress'], operation=projection['operation'])
             return True
 
+    def observe_mqtt_operation(self, deployment_id, identifier, value):
+        if not self.observe_update_operation(deployment_id, identifier, value):
+            return False
+        with self._progress_lock:
+            record = self.store.get_device(identifier)
+            cached = (record or {}).get('poll_state') or {}
+            state = self._api_reads.setdefault(identifier, copy_trace(cached))
+            previous = state.get('mqtt_progress') or {}
+            state['mqtt_progress'] = {**previous, 'operation_id': value['id'], 'received_at': self.now(),
+                                      'revision': value['revision'], 'boot_epoch': value['boot_epoch']}
+        self._progress_observed(identifier, time.monotonic(), received=True)
+        with self._progress_lock:
+            self._progress_reads[identifier]['transport'] = 'mqtt'
+            self.store.record_poll_state(identifier, self._poll_state(identifier))
+        return True
+
     def cancel_deployment_target(self, deployment_id, identifier):
         with self._action_lock(identifier):
             deployment = self.store.get_deployment(deployment_id)
@@ -1514,12 +1557,17 @@ class FleetController:
             raise ValueError('deployment update type is invalid')
         client = self._client(record, max(30, self.timeout))
         operation_id = None
+        report_key = None
         if deployment_id is not None:
             metadata = client.request('/api/v3')
             if metadata.get('capabilities', {}).get('update_operation_contract') != 1:
                 raise ValueError('Update IoT-MD locally to the device-owned operation release before deploying; legacy inferred tracking is retired')
             operation_id = secrets.token_hex(16)
             commands[0]['id'] = operation_id
+            if self.tracking['method'] == 'mqtt':
+                if metadata.get('capabilities', {}).get('update_operation_reports') is not True:
+                    raise ValueError('Update IoT-MD to a release with authenticated MQTT operation reports before selecting MQTT tracking')
+                report_key = secrets.token_hex(32)
         policy = {
             'format_version': 2,
             'target_board': 'esp32-s3',
@@ -1548,6 +1596,7 @@ class FleetController:
             'commands': commands,
         }
         signed = self.signer.sign(policy)
+        payload = signed
         if deployment_id is not None:
             device = (record.get('inventory') or {}).get('device') or {}
             self.store.set_deployment_target(deployment_id, target, 'checking',
@@ -1557,13 +1606,19 @@ class FleetController:
                     'command_ids': [command['id'] for command in commands],
                     'update_operation_id': operation_id, 'policy_sequence': policy['policy_sequence'],
                     'device_id': device_target,
+                    'tracking_method': self.tracking['method'],
                 })
+            if report_key:
+                topic = report_topic(self.tracking['topic_template'], device_target, operation_id)
+                self.store.save_update_report_key(operation_id, deployment_id, target, topic, report_key)
+                payload = {'policy': signed, 'report_key': report_key,
+                    'reporting': {name: self.tracking[name] for name in ('host', 'port', 'topic_template')}}
         # Bound a dripping POST response too. An uncertain outcome is durably
         # handed to reconciliation below, never retried on a second worker.
         client.deadline = time.monotonic() + 2 * max(30, self.timeout)
         try:
             result = client.request(
-                '/api/v3/fleet/policy', 'POST', signed
+                '/api/v3/fleet/policy', 'POST', payload
             )
         except Exception as exc:
             if 'fleet policy signature verification failed' in str(exc):

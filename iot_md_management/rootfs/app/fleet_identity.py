@@ -80,7 +80,7 @@ def migrate_hostname_identities(store):
             for old, host, new in normalized:
                 current = temporary_ids.get(old, old)
                 db.execute('UPDATE devices SET id=?,host=? WHERE id=?', (new, host, current))
-            for table, column in (('events', 'device_id'), ('backups', 'device_id')):
+            for table, column in (('events', 'device_id'), ('backups', 'device_id'), ('update_report_keys', 'device_id')):
                 records = db.execute('SELECT rowid AS migration_rowid,' + column + ' FROM ' + table).fetchall()
                 for record in records:
                     if record[column] in mapping:

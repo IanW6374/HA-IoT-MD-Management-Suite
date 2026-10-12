@@ -20,6 +20,39 @@ configuration:
   progress_timeout_s:
     name: Live progress read budget
     description: Seconds for one live status read, including waiting for a busy device. Discovery and final health confirmation use separate request-timeout budgets. Uncertain mutations are reconciled, never automatically replayed.
+  update_tracking_method:
+    name: Update progress transport
+    description: API (default) uses authenticated snapshots. MQTT uses authenticated push reports with API reconciliation; update commands still use the Device API. Changes apply to new actions.
+  mqtt_host:
+    name: MQTT broker hostname
+    description: Configurable trusted broker for optional update reports. Devices must already use this same broker; Management does not overwrite their MQTT settings.
+  mqtt_port:
+    name: MQTT broker TLS port
+    description: Recommended 8883. TLS certificate and hostname verification are always required; there is no insecure mode.
+  mqtt_username:
+    name: MQTT username
+    description: Optional broker account allowed to subscribe to the progress topic.
+  mqtt_password:
+    name: MQTT password
+    description: Optional broker account password. Never included in device reports or diagnostics.
+  mqtt_ca_path:
+    name: MQTT broker CA path
+    description: Optional CA bundle in /ssl. Leave empty to use system trust roots.
+  mqtt_client_cert_path:
+    name: MQTT client certificate path
+    description: Optional client certificate for mutual TLS broker authentication; configure its matching private key too.
+  mqtt_client_key_path:
+    name: MQTT client private key path
+    description: Optional private key for the MQTT client certificate. Kept in /ssl, never sent to devices.
+  mqtt_progress_topic:
+    name: MQTT progress topic template
+    description: Recommended iotmd/update-operations/{device_id}/{operation_id}. Both placeholders are required once, in separate complete levels. No wildcards; Management derives its subscription.
+  mqtt_report_stale_s:
+    name: MQTT report stale threshold
+    description: Seconds without a new authenticated report before falling back to normal API progress reads. Recommended 15.
+  mqtt_snapshot_interval_s:
+    name: MQTT API reconciliation interval
+    description: Maximum seconds between API snapshots even when MQTT reports are fresh. Recommended 60; cancellation always reconciles over API too.
   device_api_ca_path:
     name: Device API CA path
     description: CA bundle in /ssl used to verify every managed IoT-MD Device API.

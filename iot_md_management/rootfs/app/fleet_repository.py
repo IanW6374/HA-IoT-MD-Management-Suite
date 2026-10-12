@@ -58,6 +58,14 @@ class FleetRepository:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS update_report_keys (
+                    operation_id TEXT PRIMARY KEY,
+                    deployment_id TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    topic TEXT NOT NULL,
+                    secret TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS devices (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -244,6 +252,34 @@ class FleetRepository:
                 'SELECT value FROM metadata WHERE key=?', (str(key),)
             ).fetchone()
         return default if row is None else row['value']
+
+    def save_update_report_key(self, operation_id, deployment_id, device_id, topic, key):
+        if not self.profile_cipher:
+            raise ValueError('Encrypted update-report key storage is unavailable')
+        secret = self.profile_cipher.encrypt({'key': key})
+        with self.lock, self.connection:
+            count = self.connection.execute('SELECT count(*) FROM update_report_keys').fetchone()[0]
+            if count >= 10000:
+                self.connection.execute('''DELETE FROM update_report_keys WHERE operation_id IN (
+                    SELECT k.operation_id FROM update_report_keys k JOIN deployments d ON d.id=k.deployment_id
+                    WHERE d.status NOT IN ('queued','active') ORDER BY k.created_at LIMIT 1000)''')
+                count = self.connection.execute('SELECT count(*) FROM update_report_keys').fetchone()[0]
+                if count >= 10000:
+                    raise ValueError('Update-report key capacity is full; no mutation dispatched')
+            self.connection.execute('''INSERT INTO update_report_keys
+                (operation_id,deployment_id,device_id,topic,secret,created_at) VALUES(?,?,?,?,?,?)''',
+                (operation_id, deployment_id, device_id, topic, secret, self.now()))
+
+    def get_update_report_key(self, operation_id):
+        """Private receiver lookup; never part of public deployment/diagnostic JSON."""
+        with self.lock:
+            row = self.connection.execute('SELECT * FROM update_report_keys WHERE operation_id=?',
+                                          (str(operation_id),)).fetchone()
+        if not row or not self.profile_cipher:
+            return None
+        result = dict(row)
+        result['key'] = self.profile_cipher.decrypt(result.pop('secret'))['key']
+        return result
 
     def set_metadata(self, key, value):
         with self.lock, self.connection:
@@ -542,6 +578,12 @@ class FleetRepository:
         with self.lock, self.connection:
             self.connection.execute('UPDATE devices SET poll_state=? WHERE id=?',
                                     (_json(state), str(identifier)))
+
+    def get_poll_state(self, identifier):
+        with self.lock:
+            row = self.connection.execute('SELECT poll_state FROM devices WHERE id=?',
+                                          (str(identifier),)).fetchone()
+        return _object(row['poll_state'], {}) if row else {}
 
     def get_progress_traces(self, identifier):
         # Frequent device/deployment list reads never select/decode trace JSON.

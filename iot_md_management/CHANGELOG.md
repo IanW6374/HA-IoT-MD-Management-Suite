@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.2.13 - 2026-10-12
+
+- Add optional authenticated MQTT update-progress tracking. API remains the
+  default; update/cancel commands still use mTLS Device API operations. Fresh
+  push reports suppress frequent API status reads, while stale reports, broker
+  outages, cancellation and periodic reconciliation retain bounded API reads.
+- Install IoT-MD Alpha 124 on devices before selecting MQTT. Devices on Alpha
+  123 retain API tracking; commands and cancellation still use the Device API.
+- Make broker hostname/port, credentials, TLS CA/client identity, progress topic
+  template and fallback intervals configurable in HA app settings. Recommended
+  topic: `iotmd/update-operations/{device_id}/{operation_id}`; current default
+  broker: `mqtt-broker.home.arpa:8883`. TLS verification is mandatory.
+- Use independently verified per-operation HMAC reports with encrypted-at-rest
+  keys, immutable device/release binding, boot epochs and ordered sample cursors.
+  Keep broker callbacks bounded/coalesced and reject replayed or forged messages.
+  No credentials or report keys enter broker messages, diagnostics or public jobs.
+- Expose redacted MQTT receiver status in scheduler diagnostics. API default
+  never starts a broker connection. Live broker/device testing is not performed.
+
 ## 3.2.12 - 2026-10-12
 
 - Track new update actions by their exact device-owned operation ID and signed
