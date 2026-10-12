@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 3.2.8', addon)
+        self.assertIn('version: 3.2.9', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('device_worker_limit: 8', addon)
         self.assertIn('device_worker_limit: int(2,32)', addon)
@@ -71,6 +71,25 @@ class FleetAddonTests(unittest.TestCase):
             handler.do_GET()
             self.assertIn('progress_reads', handler._json.call_args.args[1])
             transport.assert_not_called()
+
+    def test_live_deployment_reads_omit_history_but_include_requested_terminal_transitions(self):
+        store = self.module.STORE
+        store.register({'id': 'live-only-device', 'host': 'live-only-device.local'})
+        old = store.create_deployment({'profile_name': 'baseline'}, ['live-only-device'])
+        store.set_deployment_target(old['id'], 'live-only-device', 'complete')
+        live = store.create_deployment({'profile_name': 'baseline'}, ['live-only-device'])
+        handler = object.__new__(self.module.Handler)
+        handler._json = mock.Mock()
+        handler.path = '/api/deployments?view=active'
+        with mock.patch.object(store, 'list_deployments', side_effect=AssertionError('Historical collection')):
+            handler.do_GET()
+            self.assertEqual([item['id'] for item in handler._json.call_args.args[1]['deployments']], [live['id']])
+            store.set_deployment_target(live['id'], 'live-only-device', 'cancelled')
+            handler.path += '&include=' + live['id']
+            handler.do_GET()
+            data = handler._json.call_args.args[1]['deployments']
+            self.assertEqual([item['id'] for item in data], [live['id']])
+            self.assertEqual(data[0]['status'], 'cancelled')
 
     def test_ingress_uses_shared_iot_brand_shell(self):
         self.assertIn('<header class="topbar">', self.module.HTML)

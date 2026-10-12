@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.2.9 - 2026-10-12
+
+- Use the authenticated small live update-status capability when available;
+  retain API v3 inventory reads for devices receiving the enabling upgrade.
+- Separate discovery, live status and final health-confirmation deadlines.
+  Retain valid discovery across transient timeouts; invalidate on changed
+  credentials, observed boot identity, protocol or authorization failures.
+- Hand accepted/uncertain deployment submissions to read-only reconciliation
+  without an inline full poll or automatic mutation replay.
+- Retry recently responsive devices promptly, expose read-stage timings/bytes,
+  queue age and next retry, and account for bounded fleet polling rounds in
+  freshness diagnostics. Keep fresh health and trial/command checks intact.
+- Scope periodic browser reads to the visible page and coalesce them.
+- Add real-client/controller timing regressions and scaled-latency 3/50/100
+  device saturation/recovery coverage. Physical upgrade verification is still
+  required before declaring hardware performance qualified.
+
 ## 3.2.8 - 2026-10-12
 
 - Fix the 3.2.7 full-poll timeout regression: give each HTTP read its own

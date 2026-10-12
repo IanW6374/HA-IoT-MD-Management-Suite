@@ -91,12 +91,17 @@ class DeviceMutationRejected(ValueError):
     """An explicit precondition/permission rejection, not an ambiguous I/O failure."""
 
 
+class DeviceReadUnavailable(RuntimeError):
+    """Transient HTTP read failure; valid discovery remains reusable."""
+
+
 class DeviceClient:
     def __init__(self, record, timeout=10, sequence_provider=None, request_recorder=None,
                  request_slots=None, deadline=None, read_observer=None):
         self.record = record
         self.timeout = int(timeout)
         self.api_metadata = None
+        self.discovered_at = 0
         self.sequence_provider = sequence_provider
         self.request_recorder = request_recorder
         self.last_request_key = None
@@ -107,6 +112,12 @@ class DeviceClient:
         self.read_observer = read_observer
         self.read_path = ''
         self.request_deadline = None
+        self.read_metrics = []
+        self.read_stage = ''
+        self.read_bytes = 0
+        self.read_timings = {}
+        self.read_stage_started = time.monotonic()
+        self.response_limit = 16 * 1024 * 1024
         with _DEVICE_REQUEST_LOCK:
             self.request_lock = _DEVICE_REQUEST_LOCKS.setdefault(
                 (str(record.get('host', '')).lower(), int(record.get('port', 8444))), threading.RLock())
@@ -133,13 +144,36 @@ class DeviceClient:
         return remaining
 
     def request(self, path, method='GET', payload=None, content_type='application/json'):
+        started = time.monotonic()
+        self.read_stage, self.read_bytes = '', 0
+        self.read_timings, self.read_stage_started = {}, started
+        self._read_stage('reservation')
         self.read_path = path.split('?', 1)[0]
+        error = ''
         try:
             return self._reserved_request(path, method, payload, content_type)
         except Exception as exc:
+            error = device_connection_error(exc)
             if method == 'GET':
-                self._observe_read(self.read_path, device_connection_error(exc))
+                self._observe_read(self.read_path, error)
             raise
+        finally:
+            if method == 'GET':
+                stage = self.read_stage
+                self._read_stage('finished')
+                self.read_metrics.append({'path': self.read_path, 'stage': self.read_stage,
+                    'duration_ms': round((time.monotonic() - started) * 1000),
+                    'response_bytes': self.read_bytes, 'error': bounded_text(error),
+                    'stage_ms': dict(self.read_timings)})
+                self.read_metrics[-1]['stage'] = stage
+                self.read_metrics = self.read_metrics[-6:]
+
+    def _read_stage(self, stage):
+        now = time.monotonic()
+        if self.read_stage:
+            self.read_timings[self.read_stage] = self.read_timings.get(self.read_stage, 0) + round(
+                (now - self.read_stage_started) * 1000)
+        self.read_stage, self.read_stage_started = stage, now
 
     def _observe_read(self, path, error=''):
         if self.read_observer:
@@ -173,6 +207,7 @@ class DeviceClient:
             if not isinstance(metadata, dict) or metadata.get('api_version') != 3:
                 raise ValueError('Device API v3 required; update IoT-MD and Management together')
             self.api_metadata = metadata
+            self.discovered_at = time.monotonic()
             self._observe_read('/api/v3')
         self.read_path = path.split('?', 1)[0]
         headers = {}
@@ -199,6 +234,9 @@ class DeviceClient:
             raise ValueError('Invalid Device API v3 response')
         if method == 'GET':
             self._observe_read(path)
+            if path == '/api/v3':
+                self.api_metadata = result
+                self.discovered_at = time.monotonic()
         if method == 'POST' and self.request_recorder:
             operation = result.get('operation', {})
             self.request_recorder(self.last_request_key, method, path,
@@ -227,8 +265,11 @@ class DeviceClient:
             headers=dict({'Content-Type': content_type, 'Accept': 'application/json'}, **(headers or {})),
         )
         try:
+            self._read_stage('tls_context')
+            context = self._context()
+            self._read_stage('connect/headers')
             with urllib.request.urlopen(
-                request, context=self._context(), timeout=self._remaining()
+                request, context=context, timeout=self._remaining()
             ) as response:
                 return self._response_json(response)
         except urllib.error.HTTPError as exc:
@@ -245,10 +286,12 @@ class DeviceClient:
                 exc.close()
             if path == '/api/v3' and exc.code in (404, 410):
                 detail = 'Device API v3 required; update IoT-MD and Management together'
-            error = DeviceMutationRejected if exc.code in (400, 403, 404, 405, 410) else ValueError
+            error = (DeviceReadUnavailable if method == 'GET' and exc.code in (429, 500, 502, 503, 504)
+                     else DeviceMutationRejected if exc.code in (400, 403, 404, 405, 410) else ValueError)
             raise error(bounded_text(detail, 256)) from None
 
     def _response_json(self, response):
+        self._read_stage('body')
         if self.deadline is None and self.request_deadline is None:
             return json.loads(response.read())
         chunks, size = [], 0
@@ -264,9 +307,11 @@ class DeviceClient:
                 break
             chunks.append(chunk)
             size += len(chunk)
-            if size > 16 * 1024 * 1024:
+            self.read_bytes = size
+            if size > self.response_limit:
                 raise ValueError('Device API response is too large')
         self._remaining()
+        self._read_stage('decode')
         return json.loads(b''.join(chunks))
 
 
@@ -580,21 +625,55 @@ class FleetController:
         with self._progress_lock:
             previous = self._progress_reads.get(identifier, {})
             self._progress_reads[identifier] = {
+                **previous,
                 'last_attempt': self.now(), 'last_received': self.now() if received else previous.get('last_received', 0),
                 'error': bounded_text(error), 'duration_ms': round((time.monotonic() - started) * 1000),
+                'received_on_attempt': bool(received),
             }
 
     def poll_progress(self, identifier):
-        """Read live inventory without waiting for configuration/event collection."""
+        """Independent discovery, status and confirmation budgets; no writes/replays."""
         started = time.monotonic()
         record = self.store.get_device(identifier, public=False)
         if not record or not record.get('enabled'):
             return
         received = False
+        client = None
+        workflow_stage = 'discovery'
+        boot_id = ''
         try:
             client = self._progress_client(record)
-            client.deadline = started + self.progress_timeout
-            inventory = self._read_device(identifier, client, '/api/v3/device/inventory')
+            if isinstance(client, DeviceClient):
+                client.read_metrics = []
+                # Discovery is bootstrap, not part of the status-read deadline.
+                client.timeout = self.timeout
+                if (client.api_metadata is not None and
+                        not client.api_metadata.get('capabilities', {}).get('live_update_status') and
+                        time.monotonic() - client.discovered_at >= 60):
+                    # An enabling universal upgrade may restart an older v3
+                    # device whose inventory doesn't carry a boot identity.
+                    client.api_metadata = None
+                if client.api_metadata is None:
+                    client.deadline = time.monotonic() + self.timeout
+                    self._read_device(identifier, client, '/api/v3')
+            workflow_stage = 'status'
+            client.deadline = time.monotonic() + self.progress_timeout
+            compact = (isinstance(client, DeviceClient) and
+                       bool((client.api_metadata or {}).get('capabilities', {}).get('live_update_status')))
+            # Existing API v3 devices can receive the upgrade which introduces
+            # this capability. Never fall back to v2 or bypass authentication.
+            path = '/api/v3/fleet/update-status' if compact else '/api/v3/device/inventory'
+            if isinstance(client, DeviceClient):
+                client.response_limit = 65536 if compact else 16 * 1024 * 1024
+            inventory = self._read_device(identifier, client, path)
+            if not isinstance(inventory.get('device'), dict) or not isinstance(inventory.get('fleet') or {}, dict):
+                raise ValueError('Invalid live device status response')
+            if compact and not isinstance(inventory.get('fleet'), dict):
+                raise ValueError('Invalid live fleet status response')
+            expected_id = ((record.get('inventory') or {}).get('device') or {}).get('device_id')
+            if expected_id and inventory['device'].get('device_id') != expected_id:
+                raise ValueError('Live device identity does not match the enrolled device')
+            boot_id = str(inventory.get('boot_id') or '')
             observed = {**record, 'inventory': inventory, 'fleet': inventory.get('fleet') or {}}
             received = True
             self._progress_observed(identifier, started, received=True)
@@ -610,6 +689,8 @@ class FleetController:
                 if update and self._deployment_update_completed(deployment, identifier, observed) and not self._installation_started(observed, update, {}):
                     candidates.append(deployment)
             if candidates:
+                workflow_stage = 'confirmation'
+                client.deadline = time.monotonic() + self.timeout
                 health = self._read_device(identifier, client, '/api/v3/health')
                 if not isinstance(health.get('health'), dict):
                     raise ValueError('Invalid device health confirmation response')
@@ -618,11 +699,20 @@ class FleetController:
                         (deployment['update'].get('version') or 'Update') + ' installed',
                         progress={'completed': ['queued', 'inspect', 'core_write', 'core_verify',
                             'application_download', 'application_verify', 'pair', 'install', 'complete'], 'phase': 'complete'})
+                if isinstance(client, DeviceClient):
+                    # The next deployment must rediscover post-upgrade API
+                    # capabilities, while retaining the verified TLS context.
+                    client.api_metadata = None
             # Cancellation acknowledgement is a read, never a replay of its POST.
             cancelling = [item for item in self.store.active_deployments()
                 if item['results'].get(identifier, {}).get('status') == 'cancelling']
             if cancelling:
-                acknowledgement = self._read_device(identifier, client, '/api/v3/fleet/update-cancel')
+                workflow_stage = 'cancellation'
+                if compact:
+                    acknowledgement = inventory.get('cancellation') or {}
+                else:
+                    client.deadline = time.monotonic() + self.timeout
+                    acknowledgement = self._read_device(identifier, client, '/api/v3/fleet/update-cancel')
                 for deployment in cancelling:
                     update = deployment.get('update') or {}
                     if (acknowledgement.get('status') == 'cancelled' and
@@ -632,12 +722,28 @@ class FleetController:
                             'cancelled', 'Update cancelled; staged data discarded')
             self._progress_observed(identifier, started, received=True)
         except Exception as exc:
-            with self._progress_lock:
-                self._progress_clients.pop(identifier, None)
+            # A slow status/health response doesn't invalidate successful API
+            # discovery. Identity/certificate changes are handled by the cache
+            # fingerprint; protocol/auth rejection explicitly invalidates it.
+            if isinstance(exc, (ValueError, ssl.SSLError)):
+                with self._progress_lock:
+                    self._progress_clients.pop(identifier, None)
             self._progress_observed(identifier, started, error=device_connection_error(exc), received=received)
             self._mark_immediate_install_restart(identifier)
             raise
         finally:
+            with self._progress_lock:
+                diagnostic = self._progress_reads.get(identifier, {})
+                previous_boot = diagnostic.get('boot_id', '')
+                diagnostic.update(workflow_stage=workflow_stage,
+                    reads=list(client.read_metrics) if isinstance(client, DeviceClient) else [])
+                api_success = (self._api_reads.get(identifier, {}).get('api') or {}).get('last_success', 0)
+                diagnostic['responsive'] = bool(received or api_success and self.now() - api_success <= 120)
+                if boot_id:
+                    diagnostic['boot_id'] = boot_id
+                    if previous_boot and previous_boot != boot_id and isinstance(client, DeviceClient):
+                        client.api_metadata = None
+                self._progress_reads[identifier] = diagnostic
             # One durable diagnostic write per live workflow, not per HTTP read.
             self.store.record_poll_state(identifier, self._poll_state(identifier))
 
@@ -1252,11 +1358,15 @@ class FleetController:
             'commands': commands,
         }
         signed = self.signer.sign(policy)
+        client = self._client(record, max(30, self.timeout))
+        # Bound a dripping POST response too. An uncertain outcome is durably
+        # handed to reconciliation below, never retried on a second worker.
+        client.deadline = time.monotonic() + 2 * max(30, self.timeout)
         try:
-            result = self._client(record, max(30, self.timeout)).request(
+            result = client.request(
                 '/api/v3/fleet/policy', 'POST', signed
             )
-        except ValueError as exc:
+        except Exception as exc:
             if 'fleet policy signature verification failed' in str(exc):
                 raise ValueError(
                     'The device reports the expected Management signing identity but '
@@ -1264,8 +1374,16 @@ class FleetController:
                     'current universal/core update that supports typed fleet commands, '
                     'then refresh the device and retry.'
                 ) from None
-            raise
-        self.poll_device(target)
+            if (isinstance(exc, DeviceMutationRejected) or deployment_id is None or
+                    not isinstance(getattr(client, 'last_request_key', None), str)):
+                raise
+            # The durable request recorder already marked the POST uncertain.
+            # Release dispatch to read-only reconciliation; never resend it.
+            self.store.set_deployment_target(deployment_id, target, 'checking',
+                'Update submission unconfirmed; reconciling without replay: ' + bounded_text(exc, 160))
+            return {'uncertain': True}
+        if deployment_id is None:
+            self.poll_device(target)
         return result
 
     def dispatch_rollout(self, identifier):

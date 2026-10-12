@@ -19,6 +19,7 @@ class DeviceScheduler:
         self.pool = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix='device')
         self.lock = threading.RLock()
         self.inflight, self.progress, self.full_due = {}, {}, {}
+        self.waiting_since = {}
         self.last_device = ''
         self.action_admissions = 0
         self.stopped = threading.Event()
@@ -55,6 +56,12 @@ class DeviceScheduler:
                     identifier = next(iter(identifiers))
                     failures = self.progress.get(identifier, {}).get('failures', 0) + 1 if error else 0
                     delay = min(60, self.progress_interval * 2 ** min(failures, 4))
+                    observations = self.controller.progress_diagnostics()
+                    observation = observations.get(identifier, {}) if isinstance(observations, dict) else {}
+                    if error and observation.get('responsive'):
+                        # Busy/updating or confirmation-only failure is not an
+                        # offline device. Keep the live lane observing it.
+                        delay = self.progress_interval if observation.get('received_on_attempt') else min(10, delay)
                     self.progress[identifier] = {'failures': failures, 'due': now + delay,
                         'duration_ms': round((now - started) * 1000), 'error': error}
             enabled = set(self.store.device_ids(enabled_only=True))
@@ -62,6 +69,7 @@ class DeviceScheduler:
             self.full_due = {key: value for key, value in self.full_due.items() if key in enabled}
             busy = set().union(*(item[1] for item in self.inflight.values())) if self.inflight else set()
             active = self._active_devices() & enabled
+            self.waiting_since = {key: self.waiting_since.get(key, now) for key in active}
             # Earliest-due first, with a rotating tie-break: large fleets cannot
             # keep serving their first few devices while starving the last ones.
             due = sorted((identifier for identifier in active - busy
@@ -104,6 +112,19 @@ class DeviceScheduler:
 
     def snapshot(self):
         with self.lock:
+            now = self.now()
+            active = self._active_devices()
+            duration = max([item.get('duration_ms', 0) / 1000 for key, item in self.progress.items()
+                            if key in active] or [self.progress_interval])
+            rounds = max(1, (len(active) + self.progress_limit - 1) // self.progress_limit)
+            expected = max(self.progress_interval, rounds * duration + self.progress_interval)
+            busy = {identifier: kind for kind, identifiers, started in self.inflight.values()
+                    for identifier in identifiers}
+            devices = {key: {**self.progress.get(key, {}),
+                'next_retry_s': max(0, round(self.progress.get(key, {}).get('due', now) - now, 1)),
+                'queue_wait_s': max(0, round(now - self.progress.get(key, {}).get('due', self.waiting_since.get(key, now)), 1)),
+                'waiting_for': busy.get(key, 'capacity' if self.progress.get(key, {}).get('due', 0) <= now else 'retry')}
+                for key in active | set(self.progress)}
             return {'worker_limit': self.workers, 'background_limit': self.background_limit,
                 'progress_limit': self.progress_limit,
                 'active_workers': len(self.inflight),
@@ -111,7 +132,8 @@ class DeviceScheduler:
                 'inflight': [{'kind': kind, 'devices': sorted(identifiers),
                     'duration_ms': round((self.now() - started) * 1000)}
                     for kind, identifiers, started in self.inflight.values()],
-                'devices': {key: dict(value) for key, value in self.progress.items()}}
+                'active_devices': len(active), 'expected_refresh_s': round(expected, 1),
+                'devices': devices}
 
     def run(self):
         while not self.stopped.is_set():

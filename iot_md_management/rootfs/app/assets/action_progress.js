@@ -29,8 +29,12 @@ function profileFlow(deployment){
 function progressReadPresentation(poll,status,now=Date.now()/1000){
  if(!poll||['complete','failed','cancelled'].includes(status))return null;
  const received=Number(poll.last_received)||0,age=Math.max(0,Math.floor(now-received)),stale=received&&age>Number(poll.stale_after_s||15);
+ const scheduling=poll.scheduling||{},retry=Number(scheduling.next_retry_s)||0,
+  reason=poll.error?`${poll.workflow_stage||'Status'} read failed: ${poll.error}${retry?`; next attempt in ${Math.ceil(retry)}s`:''}`:
+   scheduling.waiting_for&&scheduling.waiting_for!=='progress'?`Waiting for ${scheduling.waiting_for}`:'';
  return {text:received?`Updated ${age}s ago${poll.error?' — retrying':stale?' — stale':''}`:'Awaiting live progress',
-  tone:poll.error||stale?'warn':'muted',title:poll.error||`Last live device response: ${when(received)}; read took ${Number(poll.duration_ms)||0}ms`};
+  tone:poll.error||stale?'warn':'muted',title:[reason,`Last live device response: ${when(received)}; read took ${Number(poll.duration_ms)||0}ms`,
+   ...Array.from(poll.reads||[],read=>`${read.path}: ${read.stage}, ${read.duration_ms}ms, ${read.response_bytes} bytes`)].filter(Boolean).join('; ')};
 }
 function operationFreshness(row){
  const value=progressReadPresentation(row.freshness,row.status);

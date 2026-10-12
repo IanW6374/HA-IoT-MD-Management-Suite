@@ -382,14 +382,27 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/deployments':
                 live = STORE.active_deployments()
                 live_ids = {item['id'] for item in live}
-                deployments = live + [item for item in STORE.list_deployments(200) if item['id'] not in live_ids]
+                query = parse_qs(urlparse(self.path).query)
+                if query.get('view') == ['active']:
+                    # Live views don't repeatedly serialize 200 historical
+                    # batches. Include previously active IDs to observe their
+                    # final transition without losing cancellation/completion.
+                    recent = [STORE.get_deployment(identifier[:256])
+                              for identifier in query.get('include', [])[:64]
+                              if identifier not in live_ids]
+                    deployments = live + [item for item in recent if item]
+                else:
+                    deployments = live + [item for item in STORE.list_deployments(200) if item['id'] not in live_ids]
                 deployments.sort(key=lambda item: (item['created_at'], item['id']), reverse=True)
                 observed = CONTROLLER.progress_diagnostics()
+                scheduling = SCHEDULER.snapshot() if SCHEDULER else {}
                 for deployment in deployments:
                     for identifier, result in deployment['results'].items():
                         if identifier in observed:
                             result['progress_poll'] = {**observed[identifier],
-                                'stale_after_s': max(15, int(OPTIONS.get('progress_interval_s', 5)) * 3)}
+                                'scheduling': scheduling.get('devices', {}).get(identifier, {}),
+                                'stale_after_s': max(15, int(OPTIONS.get('progress_interval_s', 5)) * 3,
+                                                     int(scheduling.get('expected_refresh_s', 0) * 2))}
                 self._json(200, {'deployments': deployments})
             elif path == '/api/scheduler':
                 self._json(200, {'scheduler': SCHEDULER.snapshot() if SCHEDULER else {},

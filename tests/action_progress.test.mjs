@@ -43,7 +43,7 @@ test('live-read freshness reports stale/retrying data without inventing completi
   target.progress_poll.error='TLS handshake timed out <img src=x>';
   w.renderDeployments();
   assert.match(doc.querySelector('.operation-freshness').textContent,/retrying/);
-  assert.equal(doc.querySelector('.operation-freshness').title,'TLS handshake timed out <img src=x>');
+  assert.match(doc.querySelector('.operation-freshness').title,/Status read failed: TLS handshake timed out <img src=x>/);
   assert.equal(doc.querySelector('img'),null);
   target.status='complete';w.renderDeployments();assert.equal(doc.querySelector('.operation-freshness'),null);
  }finally{w.close();}

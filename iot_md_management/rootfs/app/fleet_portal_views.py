@@ -128,6 +128,12 @@ def compose(html):
     html = html.replace("api('api/backups'),api('api/devices')", "api('api/backups'),refreshDeviceStatus()")
     html = html.replace('state.devices=devices.devices;state.backups=', 'state.backups=')
     html = html.replace('async function refreshAll(){const names=', "async function refreshAll(){const requestedAuditQuery=document.getElementById('audit-search')?.value||'';const names=")
+    # Initial/manual refresh loads the workspace; periodic reads only fetch
+    # visible-page data, not every catalog and log while watching an update.
+    html = html.replace('async function refreshAll(){',
+                        'async function refreshAll(periodic=false){if(periodic&&document.hidden)return;')
+    html = html.replace("'backups','attention','seed'],results=", "'backups','attention','seed'].filter(name=>!periodic||visibleWorkspaceData(name)),results=")
+    html = html.replace('setInterval(refreshAll,10000)', 'setInterval(()=>refreshPeriodicWorkspace().catch(()=>{}),10000)')
     for source in ('audit', 'events'):
         html = html.replace('if(values.' + source + ')state.' + source,
                             "if(values." + source + "&&requestedAuditQuery===(document.getElementById('audit-search')?.value||''))state." + source)

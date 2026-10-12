@@ -9,6 +9,19 @@ const {JSDOM}=require(process.env.IOT_UI_NODE_MODULES ? `${process.env.IOT_UI_NO
 const source=fs.readFileSync(new URL('../iot_md_management/rootfs/app/assets/deployment_status.js',import.meta.url),'utf8');
 const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
 const job=(revision,status)=>({id:'job',revision,status,targets:['one'],results:{one:{status}}});
+test('periodic workspace refresh is scoped, single-flight and visibility aware',async()=>{
+ let calls=0,release;
+ const document={hidden:false,body:{dataset:{page:'actions'}},addEventListener(){}};
+ const context=vm.createContext({document,window:{addEventListener(){}},
+  refreshAll:periodic=>{assert.equal(periodic,true);calls++;return new Promise(done=>release=done);}});
+ vm.runInContext(source,context);
+ assert.equal(vm.runInContext("visibleWorkspaceData('deployments')",context),true);
+ for(const name of ['audit','events','profiles','releases'])assert.equal(vm.runInContext(`visibleWorkspaceData('${name}')`,context),false);
+ const one=vm.runInContext('refreshPeriodicWorkspace()',context),two=vm.runInContext('refreshPeriodicWorkspace()',context);
+ assert.equal(calls,1);release();await Promise.all([one,two]);
+ document.hidden=true;await vm.runInContext('refreshPeriodicWorkspace()',context);assert.equal(calls,1);
+ document.body.dataset.page='logs';assert.equal(vm.runInContext("visibleWorkspaceData('audit')",context),true);
+});
 function fixture(api,initial=[]) {
   const errors=[],cleared=[],listeners={};let renders=0,historyRenders=0,freshnessRenders=0;
   const context=vm.createContext({state:{deployments:initial},api,
@@ -19,6 +32,17 @@ function fixture(api,initial=[]) {
   vm.runInContext(source,context);
   return {context,errors,cleared,listeners,renders:()=>renders,historyRenders:()=>historyRenders,freshnessRenders:()=>freshnessRenders};
 }
+
+test('live action reads omit history and retain observed terminal transitions',async()=>{
+ const endpoints=[];
+ const f=fixture(async endpoint=>{endpoints.push(endpoint);return {deployments:endpoints.length===1?[job(2,'complete')]:[]};},[job(1,'active')]);
+ f.context.document.body={dataset:{page:'actions'}};
+ await vm.runInContext('refreshDeploymentProgress()',f.context);
+ assert.equal(endpoints[0],'api/deployments?view=active&include=job');
+ await vm.runInContext('refreshDeploymentProgress()',f.context);
+ assert.equal(endpoints[1],'api/deployments?view=active');
+ assert.equal(f.context.state.deployments[0].status,'complete');
+});
 
 test('unchanged reads age freshness without rebuilding active tables or history',async()=>{
   const f=fixture(async()=>({deployments:[job(1,'active')]}),[job(1,'active')]);

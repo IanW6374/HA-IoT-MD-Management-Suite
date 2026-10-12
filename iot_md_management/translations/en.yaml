@@ -10,16 +10,16 @@ configuration:
     description: Seconds between fleet inventory and health polls.
   request_timeout_s:
     name: Device request timeout
-    description: Maximum seconds for each Device API HTTP read, including its response body. Full polls have a separate six-request workflow budget; live progress uses its own shorter budget.
+    description: Maximum seconds for each Device API HTTP read, including its response body. Live discovery and final health confirmation have independent deadlines; routine progress uses the shorter live read budget.
   device_worker_limit:
     name: Maximum concurrent device handlers
     description: Bounds scheduled device work and API requests. Half the handlers are reserved for live progress; slow background work cannot consume them.
   progress_interval_s:
     name: Live progress interval
-    description: Seconds between successful progress reads during active actions. Unreachable devices use bounded exponential backoff.
+    description: Seconds between successful progress reads during active actions, subject to bounded worker capacity. Recently responsive devices retry promptly; unreachable devices use bounded exponential backoff.
   progress_timeout_s:
     name: Live progress read budget
-    description: Total seconds for a progress read, including waiting for a busy device and confirmation reads. Mutation requests are never abandoned and replayed.
+    description: Seconds for one live status read, including waiting for a busy device. Discovery and final health confirmation use separate request-timeout budgets. Uncertain mutations are reconciled, never automatically replayed.
   device_api_ca_path:
     name: Device API CA path
     description: CA bundle in /ssl used to verify every managed IoT-MD Device API.

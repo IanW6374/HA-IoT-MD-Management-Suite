@@ -1,5 +1,51 @@
 # Security and operations
 
+## Live update monitoring
+
+`device_worker_limit` bounds admitted device work (2–32, default 8); half of the
+handlers are reserved for live progress. Each device still has one scheduled
+handler at a time. Accepted deployment submissions hand off to live monitoring
+without collecting configuration/events inline. An uncertain mutation response
+is recorded and reconciled using reads, never automatically replayed.
+
+`progress_timeout_s` is the budget for one status read including device-lock and
+transport-capacity wait. API discovery and final health confirmation each use
+independent `request_timeout_s` budgets. A transient read timeout retains valid
+discovery; certificate/configuration changes, protocol/auth failures or an
+observed new boot identity invalidate it. The small authenticated
+`/api/v3/fleet/update-status` capability avoids full inventory work. API v3
+devices without it use inventory while receiving the enabling update; v2 stays
+retired. Trial state or a cached health report can never prove completion.
+
+Successful status reads recur after `progress_interval_s`, subject to fleet
+size and available handlers. Recently responsive devices retry promptly;
+unreachable devices retain capped exponential backoff. For example, 100 devices
+and four live handlers with three-second reads require approximately 75 seconds
+per saturated round, before scheduling overhead. Freshness thresholds account
+for observed round capacity; errors still show last-known progress as retrying.
+
+`GET /api/scheduler` reads cached diagnostics only: reserved worker counts,
+active devices, expected refresh cadence, in-flight work, queue age/next retry
+and per-device `progress_reads`. Each read includes its endpoint, failure stage,
+duration, response bytes and stage timing (reservation, TLS context,
+connect/headers, body and decoding). Connect/headers includes TLS establishment;
+it is not a separately measured handshake duration. Diagnostics contain no
+request bodies, credentials or signing material. The In-Flight tooltip names
+the failed workflow stage and next retry. Browser periodic reads are scoped to
+the visible page and single-flight; deployment/device status retain independent
+refresh paths and revision guards.
+
+The Actions page requests only active deployments plus up to 64 previously
+active identifiers to observe terminal transitions. It does not transfer the
+200-batch history on every live refresh; a bounded recent terminal cache keeps
+cancellation/completion results visible. The Logs page reads the retained
+history separately. This limits live response growth with historical batches.
+
+Offline regression tests cover separate deadlines, slow response bodies,
+reboots, confirmation failure, cancellation and 3/50/100-device scaled-latency
+load. A signed physical three-device upgrade with pre-started passive capture
+and scheduler timings remains necessary to qualify real flash/TLS performance.
+
 The LAN-facing release listener uses the configured `/ssl` certificate and key.
 Devices must trust its issuing CA. Home Assistant supports multiple named files
 in `/ssl`; this add-on reads only the explicitly configured pair.

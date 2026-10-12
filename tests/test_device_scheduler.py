@@ -185,6 +185,36 @@ class SchedulerTests(unittest.TestCase):
         finally:
             scheduler.close()
 
+    def test_confirmation_failure_on_responsive_device_retries_without_offline_backoff(self):
+        identifier = self.devices(1)[0]
+        clock = [100.]
+        controller = mock.Mock()
+        controller.poll_progress.side_effect = TimeoutError('Health read timed out')
+        controller.progress_diagnostics.return_value = {identifier: {'responsive': True, 'received_on_attempt': True}}
+        scheduler = DeviceScheduler(self.store, controller, lambda job: self.store.complete_job(job['id']), now=lambda: clock[0])
+        scheduler._active_devices = lambda: {identifier}
+        try:
+            self.drive(scheduler, lambda: identifier in scheduler.progress)
+            self.assertEqual(scheduler.progress[identifier]['due'], 105.)
+        finally:
+            scheduler.close()
+
+    def test_refresh_expectation_accounts_for_100_device_round_and_queue_age(self):
+        ids = self.devices(100)
+        clock = [110.]
+        scheduler = DeviceScheduler(self.store, mock.Mock(), mock.Mock(), now=lambda: clock[0])
+        scheduler._active_devices = lambda: set(ids)
+        scheduler.waiting_since = dict.fromkeys(ids, 100.)
+        scheduler.progress[ids[0]] = {'duration_ms': 3000, 'due': 105., 'failures': 0}
+        try:
+            report = scheduler.snapshot()
+            self.assertEqual(report['expected_refresh_s'], 80.)
+            self.assertEqual(report['devices'][ids[-1]]['queue_wait_s'], 10.)
+            self.assertEqual(report['devices'][ids[0]]['queue_wait_s'], 5.)
+            self.assertEqual(report['devices'][ids[-1]]['waiting_for'], 'capacity')
+        finally:
+            scheduler.close()
+
     def test_claim_skips_busy_device_actions_and_keeps_their_jobs_queued(self):
         one, two = self.devices(2)
         deployment = self.store.create_deployment({'profile_name': 'baseline'}, [one, two])
@@ -295,7 +325,8 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(self.store.get_deployment(deployment['id'])['results'][identifier]['status'], 'installing')
         self.assertGreater(controller.progress_diagnostics()[identifier]['last_received'], 0)
         self.assertEqual(self.store.get_device(identifier)['last_seen'], 0)
-        controller._client = mock.Mock(return_value=mock.Mock(request=lambda path:
+        # A transient confirmation failure now retains the discovered client.
+        controller._client.return_value.request = mock.Mock(side_effect=lambda path: (
             inventory if path.endswith('/inventory') else {'health': {}}))
         controller.poll_progress(identifier)
         self.assertEqual(self.store.get_deployment(deployment['id'])['results'][identifier]['status'], 'complete')
