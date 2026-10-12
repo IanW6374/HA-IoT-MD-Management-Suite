@@ -25,6 +25,39 @@ def response(value):
 
 
 class DeviceAPIv3ClientTests(unittest.TestCase):
+    def test_confirmed_pre_dispatch_storage_failure_is_rejected_and_not_replayed(self):
+        self.client.api_metadata = {'api_version': 3, 'capabilities': {'persistent_idempotency': True},
+                                    'next_request_sequence': 1}
+        recorder = self.client.request_recorder = mock.Mock()
+        value = {'api_version': 3, 'error': {'code': 'operation_reservation_failed',
+            'phase': 'reservation', 'dispatched': False, 'message': 'Operation storage unavailable'}}
+        failure = urllib.error.HTTPError('https://iot-md-001.local:8444/api/v3/fleet/policy', 503,
+                                        'Unavailable', {}, response(value))
+        with mock.patch.object(SERVICE.urllib.request, 'urlopen', side_effect=failure) as transport:
+            with self.assertRaises(SERVICE.DeviceMutationRejected):
+                self.client.request('/api/v3/fleet/policy', 'POST', {})
+        self.assertEqual(transport.call_count, 1)
+        self.assertEqual(recorder.call_args.args[3], 'rejected')
+
+    def test_503_without_complete_pre_dispatch_proof_remains_uncertain(self):
+        cases = [None, {'code': 'operation_reservation_failed'},
+                 {'code': 'operation_reservation_failed', 'phase': 'dispatch', 'dispatched': False},
+                 {'code': 'operation_reservation_failed', 'phase': 'reservation', 'dispatched': 0},
+                 {'code': 'operation_outcome_uncertain', 'phase': 'reservation', 'dispatched': False}]
+        for detail in cases:
+            with self.subTest(detail=detail):
+                self.client.api_metadata = {'api_version': 3, 'capabilities': {'persistent_idempotency': True},
+                                            'next_request_sequence': 1}
+                recorder = self.client.request_recorder = mock.Mock()
+                value = {'api_version': 3, 'error': detail or 'Outcome unknown'}
+                failure = urllib.error.HTTPError('https://iot-md-001.local:8444/api/v3/fleet/policy', 503,
+                                                'Unavailable', {}, response(value))
+                with mock.patch.object(SERVICE.urllib.request, 'urlopen', side_effect=failure):
+                    with self.assertRaises(ValueError) as caught:
+                        self.client.request('/api/v3/fleet/policy', 'POST', {})
+                self.assertNotIsInstance(caught.exception, SERVICE.DeviceMutationRejected)
+                self.assertEqual(recorder.call_args.args[3], 'uncertain')
+
     def test_shared_https_context_keeps_hostname_checks_and_client_authentication(self):
         client = SERVICE.DeviceClient({'host': 'device.example.com', 'port': 8444,
             'ca_path': '/ssl/private-root.pem', 'cert_path': '/ssl/client.pem',

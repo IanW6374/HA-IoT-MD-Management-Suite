@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.2.11 - 2026-10-12
+
+- Recognize authenticated API v3 storage failures as rejected only with complete
+  pre-dispatch proof: a recognized reservation error, reservation phase and
+  literal `dispatched: false`. Record rejected request outcomes instead of
+  leaving new jobs checking indefinitely. Generic/truncated/post-dispatch 503
+  outcomes remain uncertain and are never replayed automatically.
+- Pair with IoT-MD Alpha 121's explicit reservation-rejection evidence. Existing
+  uncertain jobs are not retroactively rewritten, and device storage exhaustion
+  is not resolved by this Management release. No timeout or retry policy changes.
+
 ## 3.2.10 - 2026-10-12
 
 - Retain bounded, per-deployment live-read traces in Management SQLite. Keep

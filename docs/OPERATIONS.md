@@ -8,6 +8,15 @@ handler at a time. Accepted deployment submissions hand off to live monitoring
 without collecting configuration/events inline. An uncertain mutation response
 is recorded and reconciled using reads, never automatically replayed.
 
+Confirmed operation-storage rejections carry authenticated API v3 proof that
+the handler was not dispatched (`phase: reservation`, literal `dispatched:
+false`, recognized reservation code). Management fails that new target/job
+and durably records a rejected request. It does not reuse the idempotency key
+or retry the mutation. Generic 503s, incomplete error bodies and failures after
+dispatch remain uncertain; a missing matching command alone is not proof of
+rejection. This does not retroactively resolve an earlier uncertain job whose
+device response lacked that evidence.
+
 `progress_timeout_s` is the budget for one status read including device-lock and
 transport-capacity wait. API discovery and final health confirmation each use
 independent `request_timeout_s` budgets. A transient read timeout retains valid

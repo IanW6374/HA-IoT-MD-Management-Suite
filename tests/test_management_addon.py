@@ -30,7 +30,7 @@ class FleetAddonTests(unittest.TestCase):
             repository,
         )
         self.assertIn('name: IoT MD Management Suite', addon)
-        self.assertIn('version: 3.2.10', addon)
+        self.assertIn('version: 3.2.11', addon)
         self.assertIn('request_timeout_s: 30', addon)
         self.assertIn('device_worker_limit: 8', addon)
         self.assertIn('device_worker_limit: int(2,32)', addon)
@@ -2072,6 +2072,39 @@ let api=()=>{calls++;return new Promise(resolve=>finish=resolve)};
         fresh = controller.create_deployment(request)
         controller.execute_deployment_target(fresh['id'], 'one')
         self.assertEqual(controller.apply_policy.call_count, 2)
+
+    def test_real_pre_dispatch_503_fails_new_target_instead_of_checking_forever(self):
+        import urllib.error
+        from types import SimpleNamespace
+        from fleet_service import FleetController, DeviceClient, DeviceMutationRejected
+        store = self.module.FleetStore(Path(self.temp.name) / 'storage-rejected.db')
+        self.addCleanup(store.close)
+        store.register({'id': 'one', 'host': 'one.local'})
+        store.record_poll('one', {'device': {'device_id': 'physical-one',
+            'release_sequence': 2825, 'firmware_release_sequence': 2825}, 'fleet': {}}, {}, {})
+        controller = FleetController(store, SimpleNamespace(sign=lambda value: value, fingerprint=lambda: ''))
+        controller.poll_device = mock.Mock()
+        deployment = controller.create_deployment({'activation': 'now', 'targets': ['one'],
+            'update': {'release_sequence': 2826, 'release_type': 'universal'}})
+        job = store.claim_job()
+        response = {'api_version': 3, 'error': {'code': 'operation_reservation_failed',
+            'phase': 'reservation', 'dispatched': False, 'message': 'encrypted transactional storage is full'}}
+        failure = urllib.error.HTTPError('https://one.local:8444/api/v3/fleet/policy', 503,
+            'Unavailable', {}, io.BytesIO(json.dumps(response).encode()))
+        discovery = io.BytesIO(json.dumps({'api_version': 3,
+            'capabilities': {'persistent_idempotency': True}, 'next_request_sequence': 1}).encode())
+        with mock.patch.object(DeviceClient, '_context', return_value=object()), \
+             mock.patch('fleet_service.urllib.request.urlopen', side_effect=[discovery, failure]) as transport:
+            with self.assertRaises(DeviceMutationRejected):
+                controller.execute_deployment_target(deployment['id'], 'one')
+        self.assertEqual(transport.call_count, 2)  # discovery + one rejected write, no replay
+        store.fail_job(job['id'], 'encrypted transactional storage is full')
+        self.assertEqual(store.get_deployment(deployment['id'])['results']['one']['status'], 'failed')
+        self.assertEqual(store.get_deployment(deployment['id'])['status'], 'failed')
+        self.assertEqual(store.active_jobs('deployment'), [])
+        self.assertEqual(json.loads(store.metadata('api_request_journal'))[-1]['state'], 'rejected')
+        controller.execute_deployment_target(deployment['id'], 'one')
+        self.assertEqual(store.get_deployment(deployment['id'])['status'], 'failed')
 
     def test_overlapping_deployments_are_rejected_without_partial_creation(self):
         store = self.module.FleetStore(Path(self.temp.name) / 'overlap.db')

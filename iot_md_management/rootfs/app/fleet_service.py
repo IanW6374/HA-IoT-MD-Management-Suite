@@ -235,9 +235,10 @@ class DeviceClient:
                 self.request_recorder(self.last_request_key, method, path, 'reserved', '')
         try:
             result = self._request(path, method, payload, content_type, headers)
-        except Exception:
+        except Exception as exc:
             if method == 'POST' and self.request_recorder:
-                self.request_recorder(self.last_request_key, method, path, 'uncertain', '')
+                self.request_recorder(self.last_request_key, method, path,
+                    'rejected' if isinstance(exc, DeviceMutationRejected) else 'uncertain', '')
             raise
         if not isinstance(result, dict) or result.get('api_version') != 3:
             raise ValueError('Invalid Device API v3 response')
@@ -284,10 +285,15 @@ class DeviceClient:
                 return self._response_json(response)
         except urllib.error.HTTPError as exc:
             self.read_http_status = exc.code
+            rejected_before_dispatch = False
             try:
                 value = self._response_json(exc.fp)
                 detail = value.get('error') if isinstance(value, dict) else value
                 if isinstance(detail, dict):
+                    rejected_before_dispatch = (method == 'POST' and exc.code == 503 and
+                        value.get('api_version') == 3 and
+                        detail.get('code') in ('operation_reservation_failed', 'journal_full', 'operation_limit') and
+                        detail.get('phase') == 'reservation' and detail.get('dispatched') is False)
                     detail = detail.get('message') or detail.get('code')
             except TimeoutError:
                 raise
@@ -297,7 +303,8 @@ class DeviceClient:
                 exc.close()
             if path == '/api/v3' and exc.code in (404, 410):
                 detail = 'Device API v3 required; update IoT-MD and Management together'
-            error = (DeviceReadUnavailable if method == 'GET' and exc.code in (429, 500, 502, 503, 504)
+            error = (DeviceMutationRejected if rejected_before_dispatch else
+                     DeviceReadUnavailable if method == 'GET' and exc.code in (429, 500, 502, 503, 504)
                      else DeviceMutationRejected if exc.code in (400, 403, 404, 405, 410) else ValueError)
             raise error(bounded_text(detail, 256)) from None
 
